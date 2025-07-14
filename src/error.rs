@@ -4,3 +4,9 @@ pub enum Error {
     MatrixShapeError(String),
     EncodingError,
 }
+
+pub enum CommitmentError {
+    ProofGenerationError,
+    ProofVerificationError,
+    PathDeserialisationFailed,
+}

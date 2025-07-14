@@ -1,3 +1,4 @@
+use crate::error::Error;
 use ark_ff::fields::Field;
 use ndarray::Array2 as Matrix;
 use reed_solomon_simd::{decode, encode};
@@ -12,10 +13,9 @@ macro_rules! create_matrix {
     };
 }
 
-use crate::error::Error;
-pub struct ReadSolomon {}
+pub struct ReedSolomon {}
 
-impl ReadSolomon {
+impl ReedSolomon {
     pub fn tensor_encode<T: Field, S: Into<usize> + Copy>(
         &self,
         matrix: &Matrix<T>,

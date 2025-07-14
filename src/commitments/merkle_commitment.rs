@@ -1,4 +1,4 @@
-use crate::commitments::ACCommitmentScheme;
+use crate::{commitments::ACCommitmentScheme, error::CommitmentError};
 use ark_crypto_primitives::{
     crh::{
         injective_map::{PedersenCRHCompressor, PedersenTwoToOneCRHCompressor, TECompressor},
@@ -7,7 +7,8 @@ use ark_crypto_primitives::{
     merkle_tree::{ByteDigestConverter, Config, MerkleTree, Path},
 };
 use ark_ed_on_bls12_381::EdwardsProjective as CurveGroup;
-use ark_serialize::CanonicalSerialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use rand::thread_rng;
 
 pub type TwoToOneHash = PedersenTwoToOneCRHCompressor<CurveGroup, TECompressor, TwoToOneWindow>;
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -33,8 +34,6 @@ impl pedersen::Window for LeafWindow {
 #[derive(Clone)]
 pub struct MerkleConfig;
 impl Config for MerkleConfig {
-    // Our Merkle tree relies on two hashes: one to hash leaves, and one to hash pairs
-    // of internal nodes.
     type Leaf = [u8];
     type LeafHash = LeafHash;
     type TwoToOneHash = TwoToOneHash;
@@ -45,29 +44,36 @@ impl Config for MerkleConfig {
 
 pub type ACMerkleTree = MerkleTree<MerkleConfig>;
 
-impl ACCommitmentScheme<Vec<u8>, Vec<u8>> for ACMerkleTree {
-    fn commit(&self, _items: &Vec<Vec<u8>>) -> Vec<u8> {
+impl ACCommitmentScheme<Vec<u8>> for ACMerkleTree {
+    type Commitment = Vec<u8>;
+    type Proof = Result<Path<MerkleConfig>, CommitmentError>;
+    type Opening = Result<bool, CommitmentError>;
+
+    fn commit(&mut self, _items: &Vec<u8>) -> Self::Commitment {
         let mut writer = Vec::new();
         self.root().serialize_uncompressed(&mut writer).unwrap();
         writer
     }
 
-    fn proof(&self, items: &Vec<Vec<u8>>) -> Vec<u8> {
-        let mut writer = Vec::new();
-        self.generate_proof(0);
-        writer
+    fn proof(&self, index: &Vec<u8>) -> Self::Proof {
+        self.generate_proof(usize::from_le_bytes(index.as_slice().try_into().unwrap()))
+            .map_err(|_| CommitmentError::ProofGenerationError)
     }
 
-    fn verify(&self, items: &Vec<Vec<u8>>, commitments: &Vec<Vec<u8>>) -> bool {
-        true
-    }
+    fn open(&self, leaf: &Vec<u8>, path: &Vec<u8>) -> Self::Opening {
+        let path = Path::<MerkleConfig>::deserialize_uncompressed(path.as_slice())
+            .map_err(|_| CommitmentError::PathDeserialisationFailed)?;
 
-    fn open(
-        &self,
-        items: &Vec<Vec<u8>>,
-        commitments: &Vec<Vec<u8>>,
-        proof: &Vec<Vec<u8>>,
-    ) -> Vec<u8> {
-        vec![]
+        let mut rng = thread_rng();
+        let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
+        let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
+
+        path.verify(
+            &leaf_crh_params,
+            &two_to_one_crh_params,
+            &self.root(),
+            leaf.as_slice(),
+        )
+        .map_err(|_| CommitmentError::ProofGenerationError)
     }
 }

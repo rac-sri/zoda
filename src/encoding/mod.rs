@@ -1,4 +1,4 @@
-pub mod read_solomon;
+pub mod reed_solomon;
 
 use ark_ff::fields::Field;
 use ndarray::Array2 as Matrix;

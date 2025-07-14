@@ -1,8 +1,12 @@
-pub mod merkle_commitment;
+use crate::error::CommitmentError;
 
-pub trait ACCommitmentScheme<T: AsRef<[u8]>, S> {
-    fn commit(&self, items: &Vec<T>) -> S;
-    fn proof(&self, items: &Vec<T>) -> S;
-    fn verify(&self, items: &Vec<T>, commitments: &Vec<T>) -> bool;
-    fn open(&self, items: &Vec<T>, commitments: &Vec<T>, proof: &Vec<T>) -> S;
+pub mod merkle_commitment;
+pub trait ACCommitmentScheme<T: AsRef<[u8]>> {
+    type Commitment;
+    type Proof;
+    type Opening;
+
+    fn commit(&mut self, items: &T) -> Self::Commitment;
+    fn proof(&self, items: &T) -> Self::Proof;
+    fn open(&self, items: &T, proof: &T) -> Self::Opening;
 }
