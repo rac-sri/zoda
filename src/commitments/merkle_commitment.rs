@@ -1,10 +1,11 @@
 use crate::{commitments::ACCommitmentScheme, error::CommitmentError};
 use ark_crypto_primitives::{
     crh::{
+        CRHScheme, TwoToOneCRHScheme,
         injective_map::{PedersenCRHCompressor, PedersenTwoToOneCRHCompressor, TECompressor},
-        {CRHScheme, TwoToOneCRHScheme, pedersen},
+        pedersen,
     },
-    merkle_tree::{ByteDigestConverter, Config, MerkleTree, Path},
+    merkle_tree::{ByteDigestConverter, Config, LeafParam, MerkleTree, Path, TwoToOneParam},
 };
 use ark_ed_on_bls12_381::EdwardsProjective as CurveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -42,42 +43,91 @@ impl Config for MerkleConfig {
     type InnerDigest = <TwoToOneHash as TwoToOneCRHScheme>::Output;
 }
 
-pub type ACMerkleTree = MerkleTree<MerkleConfig>;
+pub struct ACMerkleTree {
+    tree: MerkleTree<MerkleConfig>,
+    pub leaf_hash_param: <LeafHash as CRHScheme>::Parameters,
+    pub two_to_one_hash_param: <TwoToOneHash as TwoToOneCRHScheme>::Parameters,
+}
 
-impl ACCommitmentScheme<Vec<u8>> for ACMerkleTree {
+impl ACMerkleTree {
+    pub fn new<L: AsRef<[u8]> + Send>(
+        leaf_hash_param: <LeafHash as CRHScheme>::Parameters,
+        two_to_one_hash_param: <TwoToOneHash as TwoToOneCRHScheme>::Parameters,
+        #[cfg(not(feature = "parallel"))] leaves: impl IntoIterator<Item = L>,
+        #[cfg(feature = "parallel")] leaves: impl IntoParallelIterator<Item = L>,
+    ) -> Result<Self, CommitmentError> {
+        Ok(Self {
+            tree: MerkleTree::<MerkleConfig>::new(&leaf_hash_param, &two_to_one_hash_param, leaves)
+                .map_err(|e| CommitmentError::Custom(e.to_string()))?,
+            leaf_hash_param,
+            two_to_one_hash_param,
+        })
+    }
+    fn construct_tree<L: AsRef<[u8]> + Send>(
+        &mut self,
+        #[cfg(not(feature = "parallel"))] leaves: impl IntoIterator<Item = L>,
+        #[cfg(feature = "parallel")] leaves: impl IntoParallelIterator<Item = L>,
+    ) -> Result<MerkleTree<MerkleConfig>, CommitmentError> {
+        let tree = MerkleTree::<MerkleConfig>::new(
+            &self.leaf_hash_param,
+            &self.two_to_one_hash_param,
+            leaves,
+        )
+        .map_err(|e| CommitmentError::Custom(e.to_string()))?;
+        Ok(tree)
+    }
+}
+
+impl ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> for ACMerkleTree {
     type Commitment = Vec<u8>;
-    type Proof = Result<Path<MerkleConfig>, CommitmentError>;
+    type Proof = Path<MerkleConfig>;
     type Opening = Result<bool, CommitmentError>;
 
-    fn commit(&mut self, _items: &Vec<u8>) -> Self::Commitment {
+    fn commit(&mut self, items: &Vec<Vec<u8>>) -> Result<Self::Commitment, CommitmentError> {
+        let tree = self.construct_tree(items.iter())?;
         let mut writer = Vec::new();
-        self.root().serialize_uncompressed(&mut writer).unwrap();
-        writer
+        tree.root().serialize_uncompressed(&mut writer).unwrap();
+        Ok(writer)
     }
 
-    fn proof(&self, index: &Vec<u8>) -> Self::Proof {
-        self.generate_proof(usize::from_le_bytes(index.as_slice().try_into().unwrap()))
+    fn proof(&self, index: &Vec<Vec<u8>>) -> Result<Self::Proof, CommitmentError> {
+        if index.len() != 1 {
+            CommitmentError::Custom("Invalid Leaf Input".to_string());
+        }
+        self.tree
+            .generate_proof(usize::from_le_bytes(
+                index[0].as_slice().try_into().unwrap(),
+            ))
             .map_err(|_| CommitmentError::ProofGenerationError)
     }
 
-    fn open(&self, leaf: &Vec<u8>, path: &Vec<u8>) -> Self::Opening {
-        let path = Path::<MerkleConfig>::deserialize_uncompressed(path.as_slice())
+    fn open(
+        &self,
+        leaf: &Vec<Vec<u8>>,
+        path: &Vec<Vec<u8>>,
+    ) -> Result<Self::Opening, CommitmentError> {
+        if leaf.len() != 1 {
+            CommitmentError::Custom("Invalid Leaf Input".to_string());
+        }
+        let flat_path: Vec<u8> = path.iter().flat_map(|v| v.iter()).copied().collect();
+        let path = Path::<MerkleConfig>::deserialize_uncompressed(flat_path.as_slice())
             .map_err(|_| CommitmentError::PathDeserialisationFailed)?;
 
         let mut rng = thread_rng();
         let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
         let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
-        path.verify(
-            &leaf_crh_params,
-            &two_to_one_crh_params,
-            &self.root(),
-            leaf.as_slice(),
-        )
-        .map_err(|_| CommitmentError::ProofGenerationError)
+        Ok(path
+            .verify(
+                &leaf_crh_params,
+                &two_to_one_crh_params,
+                &self.tree.root(),
+                leaf[0].as_slice(),
+            )
+            .map_err(|_| CommitmentError::ProofGenerationError))
     }
 
-    fn verify(&self, point: &Vec<u8>, proof: &Vec<u8>) -> bool {
-        self.open(point, proof).is_ok()
+    fn verify(&self, point: &Vec<Vec<u8>>, proof: &Vec<Vec<u8>>) -> Result<bool, CommitmentError> {
+        Ok(self.open(point, proof).is_ok())
     }
 }

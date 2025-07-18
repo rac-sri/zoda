@@ -1,6 +1,6 @@
 use crate::error::Error;
 use ark_ff::fields::Field;
-use ndarray::{Array1, Array2 as Matrix};
+use ndarray::{Array1, Array2 as Matrix, s};
 use reed_solomon_simd::{algorithm, decode, encode, engine};
 
 macro_rules! create_matrix {
@@ -24,9 +24,27 @@ impl ReedSolomon {
         }
     }
     pub fn tensor_encode<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
-        let rows = self.encode_rows(matrix)?;
-        let cols = self.encode_cols(&rows)?;
-        Ok(cols)
+        let n = matrix.nrows();
+        let mut matrix_tensor = Matrix::<T>::zeros((
+            self.reconstruction_factor * n, // TODO: implementation assumed reconstruction factor as 2
+            self.reconstruction_factor * n,
+        ));
+
+        matrix_tensor.slice_mut(s![0..n, 0..n]).assign(&matrix);
+
+        let q2 = self.encode_rows(&matrix)?;
+
+        matrix_tensor.slice_mut(s![0..n, n..2 * n]).assign(&q2);
+
+        let q3 = self.encode_cols(&matrix)?;
+
+        matrix_tensor.slice_mut(s![n..2 * n, 0..n]).assign(&q3);
+
+        let q4 = self.encode_cols(&q2)?;
+
+        matrix_tensor.slice_mut(s![n..2 * n, n..2 * n]).assign(&q4);
+
+        Ok(matrix_tensor)
     }
 
     pub fn encode_rows<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
@@ -36,11 +54,7 @@ impl ReedSolomon {
             .map(|row| self.encode(&row.to_vec()).ok_or(Error::EncodingError))
             .collect::<Result<Vec<Vec<T>>, Error>>()?;
 
-        create_matrix!(
-            rows,
-            matrix.nrows(),
-            matrix.ncols() * self.reconstruction_factor
-        )
+        create_matrix!(rows, matrix.nrows(), matrix.ncols())
     }
 
     pub fn encode_cols<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
@@ -50,11 +64,7 @@ impl ReedSolomon {
             .map(|col| self.encode(&col.to_vec()).ok_or(Error::EncodingError))
             .collect::<Result<Vec<Vec<T>>, Error>>()?;
 
-        create_matrix!(
-            cols,
-            matrix.nrows() * self.reconstruction_factor,
-            matrix.ncols()
-        )
+        create_matrix!(cols, matrix.nrows(), matrix.ncols())
     }
 
     fn encode<T: Field>(&self, items: &Vec<T>) -> Option<Vec<T>> {
@@ -67,7 +77,7 @@ impl ReedSolomon {
             })
             .collect::<Vec<Vec<u8>>>();
 
-        let rs_encoding = encode(items.len(), items.len() * self.reconstruction_factor, bytes)
+        let rs_encoding = encode(items.len(), items.len(), bytes)
             .map_err(|e| Error::Custom(e.to_string()))
             .ok()?
             .iter()
@@ -100,7 +110,7 @@ impl ReedSolomon {
             .collect::<Vec<(usize, Vec<u8>)>>();
         let rs_decoding = decode(
             original_shards.len(),
-            recovery_shards.len() * self.reconstruction_factor,
+            recovery_shards.len(),
             original_bytes,
             recovery_bytes,
         )
@@ -137,7 +147,6 @@ impl ReedSolomon {
         &self,
         k: usize,
     ) -> Result<Matrix<T>, Error> {
-        let n = k * self.reconstruction_factor;
         let mut matrix_rows = Vec::<Vec<T>>::new();
 
         for i in 0..k {
@@ -149,7 +158,8 @@ impl ReedSolomon {
             matrix_rows.push(encoded);
         }
 
-        let matrix = create_matrix!(matrix_rows, k, n)?;
+        println!("{:?} {:?} {:?}", matrix_rows.len(), matrix_rows[0].len(), k);
+        let matrix = create_matrix!(matrix_rows, k, k)?;
         Ok(matrix)
     }
 }

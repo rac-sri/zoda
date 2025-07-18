@@ -6,9 +6,9 @@ use ndarray::Array2 as Matrix;
 
 use crate::error::Error;
 pub struct DataGrid<A, B, T> {
-    rows: A,
-    cols: B,
-    grid: Matrix<T>,
+    pub rows: A,
+    pub cols: B,
+    pub grid: Matrix<T>,
 }
 
 impl<A, B, T> DataGrid<A, B, T>
@@ -18,7 +18,7 @@ where
     T: Field,
 {
     pub fn new(rows: A, cols: B, matrix: Matrix<T>) -> Result<Self, Error> {
-        if matrix.len() != rows.into() {
+        if matrix.nrows() != rows.into() {
             return Err(Error::LengthMismatch);
         }
         Ok(Self {

@@ -1,13 +1,13 @@
 use crate::error::CommitmentError;
 
 pub mod merkle_commitment;
-pub trait ACCommitmentScheme<T: AsRef<[u8]>> {
+pub trait ACCommitmentScheme<P, T> {
     type Commitment;
     type Proof;
     type Opening;
 
-    fn commit(&mut self, items: &T) -> Self::Commitment;
-    fn proof(&self, items: &T) -> Self::Proof;
-    fn open(&self, items: &T, proof: &T) -> Self::Opening;
-    fn verify(&self, items: &T, proof: &T) -> bool;
+    fn commit(&mut self, items: &P) -> Result<Self::Commitment, CommitmentError>;
+    fn proof(&self, items: &P) -> Result<Self::Proof, CommitmentError>;
+    fn open(&self, items: &P, proof: &T) -> Result<Self::Opening, CommitmentError>;
+    fn verify(&self, items: &P, proof: &T) -> Result<bool, CommitmentError>;
 }

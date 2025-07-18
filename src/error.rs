@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub enum Error {
     LengthMismatch,
     Custom(String),
@@ -7,8 +8,10 @@ pub enum Error {
     MatrixDimsMismatch,
 }
 
+#[derive(Debug)]
 pub enum CommitmentError {
     ProofGenerationError,
     ProofVerificationError,
     PathDeserialisationFailed,
+    Custom(String),
 }
