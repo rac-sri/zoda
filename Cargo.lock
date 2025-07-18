@@ -13,9 +13,11 @@ dependencies = [
  "ark-ff",
  "ark-poly",
  "ark-serialize",
+ "ark-std",
  "ndarray",
  "rand",
  "reed-solomon-simd",
+ "spongefish",
 ]
 
 [[package]]
@@ -424,6 +426,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -642,6 +650,19 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "spongefish"
+version = "0.2.0"
+source = "git+https://github.com/arkworks-rs/spongefish#1bff09dc6a1868ff3b5ea2e160233eeba8ad6fbb"
+dependencies = [
+ "digest",
+ "hex",
+ "keccak",
+ "rand",
+ "zerocopy",
+ "zeroize",
 ]
 
 [[package]]

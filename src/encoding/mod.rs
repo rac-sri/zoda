@@ -1,4 +1,5 @@
 pub mod reed_solomon;
+pub mod tensor_variant;
 
 use ark_ff::fields::Field;
 use ndarray::Array2 as Matrix;

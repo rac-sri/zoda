@@ -3,6 +3,8 @@ pub enum Error {
     Custom(String),
     MatrixShapeError(String),
     EncodingError,
+    DivisorIsZero,
+    MatrixDimsMismatch,
 }
 
 pub enum CommitmentError {

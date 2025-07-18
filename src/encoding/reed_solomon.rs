@@ -1,7 +1,7 @@
 use crate::error::Error;
 use ark_ff::fields::Field;
-use ndarray::Array2 as Matrix;
-use reed_solomon_simd::{decode, encode};
+use ndarray::{Array1, Array2 as Matrix};
+use reed_solomon_simd::{algorithm, decode, encode, engine};
 
 macro_rules! create_matrix {
     ($entries:expr, $rows:expr, $cols:expr) => {
@@ -13,48 +13,48 @@ macro_rules! create_matrix {
     };
 }
 
-pub struct ReedSolomon {}
+pub struct ReedSolomon {
+    reconstruction_factor: usize,
+}
 
 impl ReedSolomon {
-    pub fn tensor_encode<T: Field, S: Into<usize> + Copy>(
-        &self,
-        matrix: &Matrix<T>,
-        rows_size: S,
-        cols_size: S,
-    ) -> Result<Matrix<T>, Error> {
-        let rows = self.encode_rows(matrix, rows_size, cols_size)?;
-        let cols = self.encode_cols(&rows, rows_size, cols_size)?;
+    pub fn new(reconstruction_factor: usize) -> Self {
+        Self {
+            reconstruction_factor,
+        }
+    }
+    pub fn tensor_encode<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
+        let rows = self.encode_rows(matrix)?;
+        let cols = self.encode_cols(&rows)?;
         Ok(cols)
     }
 
-    pub fn encode_rows<T: Field, S: Into<usize> + Copy>(
-        &self,
-        matrix: &Matrix<T>,
-        rows_size: S,
-        cols_size: S,
-    ) -> Result<Matrix<T>, Error> {
+    pub fn encode_rows<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
         let rows = matrix
             .rows()
             .into_iter()
             .map(|row| self.encode(&row.to_vec()).ok_or(Error::EncodingError))
             .collect::<Result<Vec<Vec<T>>, Error>>()?;
 
-        create_matrix!(rows, rows_size, cols_size)
+        create_matrix!(
+            rows,
+            matrix.nrows(),
+            matrix.ncols() * self.reconstruction_factor
+        )
     }
 
-    pub fn encode_cols<T: Field, S: Into<usize> + Copy>(
-        &self,
-        matrix: &Matrix<T>,
-        rows_size: S,
-        cols_size: S,
-    ) -> Result<Matrix<T>, Error> {
+    pub fn encode_cols<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
         let cols = matrix
             .columns()
             .into_iter()
             .map(|col| self.encode(&col.to_vec()).ok_or(Error::EncodingError))
             .collect::<Result<Vec<Vec<T>>, Error>>()?;
 
-        create_matrix!(cols, rows_size, cols_size)
+        create_matrix!(
+            cols,
+            matrix.nrows() * self.reconstruction_factor,
+            matrix.ncols()
+        )
     }
 
     fn encode<T: Field>(&self, items: &Vec<T>) -> Option<Vec<T>> {
@@ -67,7 +67,7 @@ impl ReedSolomon {
             })
             .collect::<Vec<Vec<u8>>>();
 
-        let rs_encoding = encode(items.len(), items.len() * 2, bytes)
+        let rs_encoding = encode(items.len(), items.len() * self.reconstruction_factor, bytes)
             .map_err(|e| Error::Custom(e.to_string()))
             .ok()?
             .iter()
@@ -100,7 +100,7 @@ impl ReedSolomon {
             .collect::<Vec<(usize, Vec<u8>)>>();
         let rs_decoding = decode(
             original_shards.len(),
-            recovery_shards.len() * 2,
+            recovery_shards.len() * self.reconstruction_factor,
             original_bytes,
             recovery_bytes,
         )
@@ -110,5 +110,46 @@ impl ReedSolomon {
         .map(|(_, chunk)| T::deserialize_uncompressed(&chunk[..]).unwrap()) // TODO: handle error
         .collect::<Vec<T>>();
         Some(rs_decoding)
+    }
+
+    pub fn get_generator_matrixes<T: Field>(
+        &self,
+        rows: usize,
+        cols: usize,
+    ) -> Result<(Matrix<T>, Matrix<T>), Error> {
+        let g_row = self.get_row_generator_matrix::<T>(cols)?;
+        let g_col = self.get_col_generator_matrix::<T>(rows)?;
+        Ok((g_row, g_col))
+    }
+
+    /// Extract the generator matrix G used for row encoding
+    pub fn get_row_generator_matrix<T: Field>(&self, k: usize) -> Result<Matrix<T>, Error> {
+        self.extract_generator_matrix_empirically(k)
+    }
+
+    /// Extract the generator matrix G^T used for column encoding  
+    pub fn get_col_generator_matrix<T: Field>(&self, k: usize) -> Result<Matrix<T>, Error> {
+        let g = self.extract_generator_matrix_empirically(k)?;
+        Ok(g.t().to_owned())
+    }
+
+    pub fn extract_generator_matrix_empirically<T: Field>(
+        &self,
+        k: usize,
+    ) -> Result<Matrix<T>, Error> {
+        let n = k * self.reconstruction_factor;
+        let mut matrix_rows = Vec::<Vec<T>>::new();
+
+        for i in 0..k {
+            let mut unit_vector = vec![T::zero(); k];
+            unit_vector[i] = T::ONE;
+
+            let encoded = self.encode(&unit_vector).ok_or(Error::EncodingError)?;
+
+            matrix_rows.push(encoded);
+        }
+
+        let matrix = create_matrix!(matrix_rows, k, n)?;
+        Ok(matrix)
     }
 }

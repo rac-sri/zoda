@@ -76,4 +76,8 @@ impl ACCommitmentScheme<Vec<u8>> for ACMerkleTree {
         )
         .map_err(|_| CommitmentError::ProofGenerationError)
     }
+
+    fn verify(&self, point: &Vec<u8>, proof: &Vec<u8>) -> bool {
+        self.open(point, proof).is_ok()
+    }
 }
