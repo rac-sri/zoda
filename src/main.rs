@@ -6,9 +6,9 @@ mod sampling;
 use ark_bls12_381::Fr as Fq;
 
 use ark_crypto_primitives::crh::{CRHScheme, TwoToOneCRHScheme};
-use ark_ff::{BigInt, FftField, Field};
+use ark_ff::{BigInt, FftField, Field, inv};
 use ark_serialize::CanonicalSerialize;
-use ndarray::arr2;
+use ndarray::{arr2, s};
 use rand::{Rng, thread_rng};
 
 use crate::commitments::merkle_commitment::{ACMerkleTree, LeafHash, TwoToOneHash};
@@ -57,9 +57,10 @@ fn main() {
     let original_grid = encoding::DataGrid::new(4_u8, 4_u8, matrix).unwrap();
     let ac_merkle_tree = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
 
-    let vandermonte_matrix = tensor_obj
-        .encode(original_grid.grid, ac_merkle_tree, Fq::GENERATOR)
+    let encoded = tensor_obj
+        .encode(&original_grid.grid, ac_merkle_tree, Fq::GENERATOR)
         .unwrap();
 
-    println!("{:?}", vandermonte_matrix.0);
+    println!("original {:?}", &original_grid.grid);
+    println!("encoded {:?}", encoded.0);
 }

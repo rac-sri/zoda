@@ -5,7 +5,7 @@ use ndarray::{Array2 as Matrix, s};
 use spongefish::{BytesToUnitSerialize, DefaultHash, DomainSeparator, UnitToBytes};
 const TENSOR_VARIANT_DOMAIN_SEPARATOR: &str = "ZODA-TENSOR-VARIANT";
 pub struct TensorVariant {
-    rs: ReedSolomon,
+    pub rs: ReedSolomon,
 }
 
 impl TensorVariant {
@@ -17,7 +17,7 @@ impl TensorVariant {
     #[allow(non_snake_case)]
     pub fn encode<F: Field, C>(
         &self,
-        original_grid: Matrix<F>,
+        original_grid: &Matrix<F>,
         mut commitment: C,
         generator: F,
     ) -> Result<
