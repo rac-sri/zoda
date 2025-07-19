@@ -1,9 +1,9 @@
 use crate::error::Error;
-use ark_ff::{MontConfig, fields::Field};
+use ark_ff::fields::Field;
 use ark_poly::{DenseUVPolynomial, univariate::DensePolynomial};
-use ndarray::{Array1, Array2 as Matrix, s};
-use reed_solomon_simd::{algorithm, decode, encode, engine};
-use std::ops::Mul;
+use ndarray::Array2 as Matrix;
+use reed_solomon_simd::decode;
+
 macro_rules! create_matrix {
     ($entries:expr, $rows:expr, $cols:expr) => {
         Matrix::from_shape_vec(
@@ -14,17 +14,9 @@ macro_rules! create_matrix {
     };
 }
 
-pub struct ReedSolomon {
-    reconstruction_factor: usize,
-}
+pub struct ReedSolomon {}
 
 impl ReedSolomon {
-    pub fn new(reconstruction_factor: usize) -> Self {
-        Self {
-            reconstruction_factor,
-        }
-    }
-
     pub fn vandermonde_matrix<F: Field>(
         &self,
         alphas: &Vec<F>,
