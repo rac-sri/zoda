@@ -1,8 +1,9 @@
 use crate::error::Error;
-use ark_ff::fields::Field;
+use ark_ff::{MontConfig, fields::Field};
+use ark_poly::{DenseUVPolynomial, univariate::DensePolynomial};
 use ndarray::{Array1, Array2 as Matrix, s};
 use reed_solomon_simd::{algorithm, decode, encode, engine};
-
+use std::ops::Mul;
 macro_rules! create_matrix {
     ($entries:expr, $rows:expr, $cols:expr) => {
         Matrix::from_shape_vec(
@@ -23,69 +24,68 @@ impl ReedSolomon {
             reconstruction_factor,
         }
     }
-    pub fn tensor_encode<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
-        let n = matrix.nrows();
-        let mut matrix_tensor = Matrix::<T>::zeros((
-            self.reconstruction_factor * n, // TODO: implementation assumed reconstruction factor as 2
-            self.reconstruction_factor * n,
-        ));
 
-        matrix_tensor.slice_mut(s![0..n, 0..n]).assign(&matrix);
+    pub fn vandermonde_matrix<F: Field>(
+        &self,
+        alphas: &Vec<F>,
+        k: usize,
+    ) -> Result<Matrix<F>, Error> {
+        let matrix: Vec<Vec<F>> = (0..k)
+            .map(|i| alphas.iter().map(|&a| a.pow(&[i as u64])).collect())
+            .collect();
 
-        let q2 = self.encode_rows(&matrix)?;
-
-        matrix_tensor.slice_mut(s![0..n, n..2 * n]).assign(&q2);
-
-        let q3 = self.encode_cols(&matrix)?;
-
-        matrix_tensor.slice_mut(s![n..2 * n, 0..n]).assign(&q3);
-
-        let q4 = self.encode_cols(&q2)?;
-
-        matrix_tensor.slice_mut(s![n..2 * n, n..2 * n]).assign(&q4);
-
-        Ok(matrix_tensor)
+        create_matrix!(matrix, matrix.len(), matrix[0].len())
     }
 
-    pub fn encode_rows<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
-        let rows = matrix
-            .rows()
-            .into_iter()
-            .map(|row| self.encode(&row.to_vec()).ok_or(Error::EncodingError))
-            .collect::<Result<Vec<Vec<T>>, Error>>()?;
+    pub fn invert_vandermonde_matrix<F: Field>(&self, alphas: &Vec<F>) -> Result<Matrix<F>, Error> {
+        let n = alphas.len();
+        let mut inv = vec![vec![F::zero(); n]; n];
 
-        create_matrix!(rows, matrix.nrows(), matrix.ncols())
+        for j in 0..n {
+            // Compute the Lagrange polynomial P_j(x) = product_{m≠j} (x - alpha_m) / (alpha_j - alpha_m)
+
+            // First, compute the denominator: product_{m≠j} (alpha_j - alpha_m)
+            let mut denom = F::one();
+            for m in 0..n {
+                if m != j {
+                    denom *= alphas[j] - alphas[m];
+                }
+            }
+            let denom_inv = denom.inverse().unwrap();
+
+            // Build the numerator polynomial: product_{m≠j} (x - alpha_m)
+            let mut numerator: DensePolynomial<F> =
+                DensePolynomial::<F>::from_coefficients_vec(vec![F::one()]); // Start with 1
+
+            for m in 0..n {
+                if m != j {
+                    // Multiply by (x - alpha_m)
+                    let factor = DensePolynomial::from_coefficients_vec(vec![-alphas[m], F::one()]);
+                    numerator = numerator.naive_mul(&factor);
+                }
+            }
+
+            // Divide by denominator and store coefficients in the j-th row
+            for k in 0..n {
+                if k < numerator.coeffs.len() {
+                    inv[j][k] = numerator.coeffs[k] * denom_inv;
+                } else {
+                    inv[j][k] = F::zero();
+                }
+            }
+        }
+
+        create_matrix!(inv, inv.len(), inv[0].len())
+    }
+    pub fn alphas_with_generator<F: Field>(&self, n: usize, generator: F) -> Vec<F> {
+        (1..=n).map(|i| generator.pow([i as u64])).collect()
     }
 
-    pub fn encode_cols<T: Field>(&self, matrix: &Matrix<T>) -> Result<Matrix<T>, Error> {
-        let cols = matrix
-            .columns()
-            .into_iter()
-            .map(|col| self.encode(&col.to_vec()).ok_or(Error::EncodingError))
-            .collect::<Result<Vec<Vec<T>>, Error>>()?;
-
-        create_matrix!(cols, matrix.nrows(), matrix.ncols())
+    pub fn rs_encode<F: Field>(&self, msg: &Matrix<F>, G: &Matrix<F>) -> Result<Matrix<F>, Error> {
+        Ok(msg.dot(G))
     }
 
-    fn encode<T: Field>(&self, items: &Vec<T>) -> Option<Vec<T>> {
-        let bytes = items
-            .iter()
-            .map(|ele| {
-                let mut buf = vec![];
-                ele.serialize_uncompressed(&mut buf).unwrap(); // TODO: handle error
-                buf
-            })
-            .collect::<Vec<Vec<u8>>>();
-
-        let rs_encoding = encode(items.len(), items.len(), bytes)
-            .map_err(|e| Error::Custom(e.to_string()))
-            .ok()?
-            .iter()
-            .map(|chunk| T::deserialize_uncompressed(&chunk[..]).unwrap()) // TODO: handle error
-            .collect::<Vec<T>>();
-        Some(rs_encoding)
-    }
-
+    // TODO based on custom implementation
     fn decode<T: Field>(
         &self,
         original_shards: Vec<(usize, T)>,
@@ -120,46 +120,5 @@ impl ReedSolomon {
         .map(|(_, chunk)| T::deserialize_uncompressed(&chunk[..]).unwrap()) // TODO: handle error
         .collect::<Vec<T>>();
         Some(rs_decoding)
-    }
-
-    pub fn get_generator_matrixes<T: Field>(
-        &self,
-        rows: usize,
-        cols: usize,
-    ) -> Result<(Matrix<T>, Matrix<T>), Error> {
-        let g_row = self.get_row_generator_matrix::<T>(cols)?;
-        let g_col = self.get_col_generator_matrix::<T>(rows)?;
-        Ok((g_row, g_col))
-    }
-
-    /// Extract the generator matrix G used for row encoding
-    pub fn get_row_generator_matrix<T: Field>(&self, k: usize) -> Result<Matrix<T>, Error> {
-        self.extract_generator_matrix_empirically(k)
-    }
-
-    /// Extract the generator matrix G^T used for column encoding  
-    pub fn get_col_generator_matrix<T: Field>(&self, k: usize) -> Result<Matrix<T>, Error> {
-        let g = self.extract_generator_matrix_empirically(k)?;
-        Ok(g.t().to_owned())
-    }
-
-    pub fn extract_generator_matrix_empirically<T: Field>(
-        &self,
-        k: usize,
-    ) -> Result<Matrix<T>, Error> {
-        let mut matrix_rows = Vec::<Vec<T>>::new();
-
-        for i in 0..k {
-            let mut unit_vector = vec![T::zero(); k];
-            unit_vector[i] = T::ONE;
-
-            let encoded = self.encode(&unit_vector).ok_or(Error::EncodingError)?;
-
-            matrix_rows.push(encoded);
-        }
-
-        println!("{:?} {:?} {:?}", matrix_rows.len(), matrix_rows[0].len(), k);
-        let matrix = create_matrix!(matrix_rows, k, k)?;
-        Ok(matrix)
     }
 }

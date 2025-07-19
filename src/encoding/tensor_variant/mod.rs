@@ -1,9 +1,9 @@
 use crate::{commitments::ACCommitmentScheme, encoding::reed_solomon::ReedSolomon, error::Error};
-use ark_ff::Field;
-use ndarray::{Array2 as Matrix, ArrayBase};
+use ark_bls12_381::Fr;
+use ark_ff::{AdditiveGroup, Field};
+use ndarray::{Array2 as Matrix, ArrayBase, s};
 use rand::Rng;
 use spongefish::{BytesToUnitSerialize, DefaultHash, DomainSeparator, UnitToBytes};
-
 const TENSOR_VARIANT_DOMAIN_SEPARATOR: &str = "ZODA-TENSOR-VARIANT";
 pub struct TensorVariant {
     rs: ReedSolomon,
@@ -15,59 +15,171 @@ impl TensorVariant {
         Self { rs }
     }
 
+    // #[allow(non_snake_case)]
+    // pub fn encode<F: Field, C>(
+    //     &self,
+    //     original_grid: Matrix<F>,
+    //     mut commitment: C,
+    // ) -> Result<
+    //     (
+    //         Matrix<F>,
+    //         Matrix<F>,
+    //         Matrix<F>,
+    //         (Vec<u8>, Matrix<F>),
+    //         (Vec<u8>, Matrix<F>),
+    //         Vec<Vec<u8>>,
+    //         Vec<Vec<u8>>,
+    //     ),
+    //     Error,
+    // >
+    // where
+    //     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>>,
+    //     C::Commitment: std::convert::Into<Vec<u8>>,
+    // {
+    //     // calculate Z = GXG'
+    //     let Z = self.rs.tensor_encode(&original_grid)?;
+
+    //     println!("X = {:?}", original_grid);
+    //     println!("Z = {:?}", Z);
+
+    //     let row_wise_commits = self.row_wise_commit(&Z, &mut commitment);
+    //     let col_wise_commits = self.col_wise_commit(&Z, &mut commitment);
+
+    //     let (G, G_2) = self
+    //         .rs
+    //         .get_generator_matrixes::<F>(original_grid.nrows(), original_grid.ncols())?;
+
+    //     let test_1 = original_grid.dot(&G);
+    //     println!("test_1 {:?}", test_1);
+
+    //     let test_2 = self.field_matrix_mul(&original_grid, &G);
+    //     println!("test_2 {:?}", test_2);
+    //     println!("G = {:?}", G);
+    //     println!("G_2 = {:?}", G_2);
+
+    //     if original_grid.nrows() != original_grid.ncols() {
+    //         return Err(Error::MatrixDimsMismatch);
+    //     }
+
+    //     // generate \tilde_g and \tilde_g'
+    //     let tilde_g_r =
+    //         self.diagnol_matrix_gen::<F>(original_grid.nrows(), original_grid.ncols())?;
+    //     let tilde_g_r_2 =
+    //         self.diagnol_matrix_gen::<F>(original_grid.ncols(), original_grid.ncols())?;
+
+    //     let z_r = original_grid.dot(&G_2).dot(&tilde_g_r.1);
+
+    //     let z_r_2 = original_grid.t().dot(&G.t()).dot(&tilde_g_r_2.1);
+    //     Ok((
+    //         Z,
+    //         z_r,
+    //         z_r_2,
+    //         tilde_g_r,
+    //         tilde_g_r_2,
+    //         row_wise_commits,
+    //         col_wise_commits,
+    //     ))
+    // }
+
     #[allow(non_snake_case)]
     pub fn encode<F: Field, C>(
         &self,
         original_grid: Matrix<F>,
         mut commitment: C,
-    ) -> Result<
-        (
-            Matrix<F>,
-            Matrix<F>,
-            Matrix<F>,
-            (Vec<u8>, Matrix<F>),
-            (Vec<u8>, Matrix<F>),
-            Vec<Vec<u8>>,
-            Vec<Vec<u8>>,
-        ),
-        Error,
-    >
+        generator: F,
+    ) -> Result<(), Error>
     where
         C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>>,
         C::Commitment: std::convert::Into<Vec<u8>>,
     {
+        let n = original_grid.nrows();
+        let mut matrix_tensor = Matrix::<F>::zeros((n * 2, n * 2));
+
         // calculate Z = GXG'
-        let Z = self.rs.tensor_encode(&original_grid)?;
 
-        let row_wise_commits = self.row_wise_commit(&Z, &mut commitment);
-        let col_wise_commits = self.col_wise_commit(&Z, &mut commitment);
+        matrix_tensor
+            .slice_mut(s![0..n, 0..n])
+            .assign(&original_grid);
 
-        let (G, G_2) = self
+        let alphas = self.rs.alphas_with_generator(n, generator);
+
+        let vandermonte_matrix_G = self.rs.vandermonde_matrix(&alphas, n)?; // cache this as an optimisation
+
+        let inverse_vandermonte = self.rs.invert_vandermonde_matrix(&alphas)?;
+
+        println!(
+            "dot : {:?} ",
+            vandermonte_matrix_G.dot(&inverse_vandermonte)
+        );
+
+        let row_encoding = self.rs.rs_encode(&original_grid, &vandermonte_matrix_G)?;
+        println!("Row encoding {:?}", row_encoding);
+
+        matrix_tensor
+            .slice_mut(s![0..n, n..2 * n])
+            .assign(&row_encoding);
+
+        let col_encoding = self
             .rs
-            .get_generator_matrixes::<F>(original_grid.nrows(), original_grid.ncols())?;
+            .rs_encode(&vandermonte_matrix_G.t().to_owned(), &original_grid)?;
+        println!("Col encoding {:?}", col_encoding);
 
-        if original_grid.nrows() != original_grid.ncols() {
-            return Err(Error::MatrixDimsMismatch);
+        matrix_tensor
+            .slice_mut(s![n..2 * n, 0..n])
+            .assign(&col_encoding);
+
+        let q4 = self.rs.rs_encode(&col_encoding, &vandermonte_matrix_G)?;
+
+        matrix_tensor.slice_mut(s![n..2 * n, n..2 * n]).assign(&q4);
+
+        Ok(())
+    }
+
+    // fn invert_matrix(mut mat: Matrix<Fr>) -> Matrix<Fr> {
+    //     let n = mat.nrows();
+    //     assert_eq!(n, mat.ncols());
+    //     let mut inv = Matrix::<Fr>::eye(n);
+
+    //     for i in 0..n {
+    //         // Find pivot
+    //         let mut pivot = mat[(i, i)];
+    //         // assert!(!pivot., "Matrix is singular!");
+
+    //         // Normalize row
+    //         let inv_pivot = pivot.inverse().unwrap();
+    //         for j in 0..n {
+    //             mat[(i, j)] *= inv_pivot;
+    //             inv[(i, j)] *= inv_pivot;
+    //         }
+
+    //         // Eliminate other rows
+    //         for k in 0..n {
+    //             if k != i {
+    //                 let factor = mat[(k, i)];
+    //                 for j in 0..n {
+    //                     mat[(k, j)] -= factor * mat[(i, j)];
+    //                     inv[(k, j)] -= factor * inv[(i, j)];
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     inv
+    // }
+
+    fn field_matrix_mul<F: Field>(&self, a: &Matrix<F>, b: &Matrix<F>) -> Matrix<F> {
+        assert_eq!(a.ncols(), b.nrows());
+        let (m, n) = (a.nrows(), b.ncols());
+        let mut result = Matrix::<F>::zeros((m, n));
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = F::ZERO;
+                for k in 0..a.ncols() {
+                    sum += a[(i, k)] * b[(k, j)];
+                }
+                result[(i, j)] = sum;
+            }
         }
-
-        // generate \tilde_g and \tilde_g'
-        let tilde_g_r =
-            self.diagnol_matrix_gen::<F>(original_grid.nrows(), original_grid.ncols())?;
-        let tilde_g_r_2 =
-            self.diagnol_matrix_gen::<F>(original_grid.ncols(), original_grid.ncols())?;
-
-        let z_r = original_grid.dot(&G_2).dot(&tilde_g_r.1);
-
-        let z_r_2 = original_grid.t().dot(&G.t()).dot(&tilde_g_r_2.1);
-        Ok((
-            Z,
-            z_r,
-            z_r_2,
-            tilde_g_r,
-            tilde_g_r_2,
-            row_wise_commits,
-            col_wise_commits,
-        ))
+        result
     }
 
     fn row_wise_commit<F: Field, C>(
