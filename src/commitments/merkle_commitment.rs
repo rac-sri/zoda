@@ -43,6 +43,7 @@ impl Config for MerkleConfig {
     type InnerDigest = <TwoToOneHash as TwoToOneCRHScheme>::Output;
 }
 
+#[derive(Clone)]
 pub struct ACMerkleTree {
     tree: MerkleTree<MerkleConfig>,
     pub leaf_hash_param: <LeafHash as CRHScheme>::Parameters,

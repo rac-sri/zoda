@@ -1,9 +1,11 @@
 use crate::error::Error;
-use ark_ff::fields::Field;
-use ark_poly::{DenseUVPolynomial, univariate::DensePolynomial};
-use ndarray::Array2 as Matrix;
-use reed_solomon_simd::decode;
+use ark_ff::{FftField, fields::Field};
+use ark_poly::{
+    DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain, univariate::DensePolynomial,
+};
+use ndarray::{Array2 as Matrix, s};
 
+#[macro_export]
 macro_rules! create_matrix {
     ($entries:expr, $rows:expr, $cols:expr) => {
         Matrix::from_shape_vec(
@@ -35,7 +37,6 @@ impl ReedSolomon {
 
         for j in 0..n {
             // Compute the Lagrange polynomial P_j(x) = product_{m≠j} (x - alpha_m) / (alpha_j - alpha_m)
-
             // First, compute the denominator: product_{m≠j} (alpha_j - alpha_m)
             let mut denom = F::one();
             for m in 0..n {
@@ -77,40 +78,10 @@ impl ReedSolomon {
         Ok(msg.dot(G))
     }
 
-    // TODO based on custom implementation
-    fn decode<T: Field>(
-        &self,
-        original_shards: Vec<(usize, T)>,
-        recovery_shards: Vec<(usize, T)>,
-    ) -> Option<Vec<T>> {
-        let original_bytes = original_shards
-            .iter()
-            .map(|ele| {
-                let mut buf = vec![];
-                ele.1.serialize_uncompressed(&mut buf).unwrap(); // TODO: handle error
-                (ele.0, buf)
-            })
-            .collect::<Vec<(usize, Vec<u8>)>>();
+    pub fn rs_encode_fft<F: FftField>(&self, points: &Vec<F>) -> Result<Vec<F>, Error> {
+        let domain = GeneralEvaluationDomain::<F>::new(points.len())
+            .ok_or_else(|| Error::Custom("DOMAIN GENERATION ERROR".to_string()))?;
 
-        let recovery_bytes = recovery_shards
-            .iter()
-            .map(|ele| {
-                let mut buf = vec![];
-                ele.1.serialize_uncompressed(&mut buf).unwrap(); // TODO: handle error
-                (ele.0, buf)
-            })
-            .collect::<Vec<(usize, Vec<u8>)>>();
-        let rs_decoding = decode(
-            original_shards.len(),
-            recovery_shards.len(),
-            original_bytes,
-            recovery_bytes,
-        )
-        .map_err(|e| Error::Custom(e.to_string()))
-        .ok()?
-        .into_iter()
-        .map(|(_, chunk)| T::deserialize_uncompressed(&chunk[..]).unwrap()) // TODO: handle error
-        .collect::<Vec<T>>();
-        Some(rs_decoding)
+        Ok(domain.fft(points))
     }
 }

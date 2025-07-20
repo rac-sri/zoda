@@ -1,6 +1,7 @@
 mod commitments;
 mod encoding;
 pub(crate) mod error;
+mod grid;
 mod sampling;
 
 use ark_bls12_381::Fr as Fq;
@@ -11,11 +12,11 @@ use ark_serialize::CanonicalSerialize;
 use ndarray::{arr2, s};
 use rand::{Rng, thread_rng};
 
-use crate::commitments::merkle_commitment::{ACMerkleTree, LeafHash, TwoToOneHash};
+use crate::{
+    commitments::merkle_commitment::{ACMerkleTree, LeafHash, TwoToOneHash},
+    grid::DataGrid,
+};
 fn main() {
-    let mut rng = thread_rng();
-    let tensor_obj = encoding::tensor_variant::TensorVariant::new();
-
     let matrix = arr2(&[
         [
             Fq::new(BigInt::from(1_u8)),
@@ -51,16 +52,24 @@ fn main() {
         leaves.push(buf);
     }
 
+    let mut rng = thread_rng();
     let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
     let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
-    let original_grid = encoding::DataGrid::new(4_u8, 4_u8, matrix).unwrap();
-    let ac_merkle_tree = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
+    let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
+    let tensor_obj = encoding::tensor_variant::TensorVariant::new(Fq::GENERATOR, ac_commit);
 
-    let encoded = tensor_obj
-        .encode(&original_grid.grid, ac_merkle_tree, Fq::GENERATOR)
-        .unwrap();
+    let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
+    let i = original_grid.encode().unwrap();
 
-    println!("original {:?}", &original_grid.grid);
-    println!("encoded {:?}", encoded.0);
+    println!("Vandermote encodeing: {:?}", i);
+
+    println!(
+        "FFT encoding: {:?}",
+        original_grid
+            .variant
+            .encode_fft(&original_grid.grid)
+            .unwrap()
+            .z
+    );
 }
