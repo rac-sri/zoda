@@ -82,8 +82,8 @@ fn main() {
         col_split_end,
         &vals.z_r,
         &vals.z_r_2,
-        &sample_w,
-        &sample_y,
+        &vals.z,
+        &vals.z.t().to_owned(),
         &vals.tilde_g_r.1,
         &vals.tilde_g_r_2.1,
     );

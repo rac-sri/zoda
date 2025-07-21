@@ -68,11 +68,9 @@ where
         let z_r = original_grid.dot(&G.to_owned()).dot(&tilde_g_r.1);
 
         println!("z_r {:?}", z_r);
-        let z_r_2 = z
-            .slice(s![.., 0..original_grid.ncols()])
-            .t()
-            .dot(&tilde_g_r.1);
 
+        let z_r_2 = G.t().dot(original_grid).t().dot(&tilde_g_r.1);
+        println!("z_r_2 {:?}", z_r_2);
         Ok(TensorVariantEncodingResult {
             z,
             z_r,
@@ -109,6 +107,7 @@ where
 
         let n = original_grid.ncols();
         let z_r = z.slice(s![.., 0..n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
+
         let z_r_2 = z.slice(s![n..2 * n, ..]).t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
 
         Ok(TensorVariantEncodingResult {
@@ -326,13 +325,16 @@ where
         // 2. check W.g_r = G.z_r
         // let g_r = g_r.slice(s![row_split_start..row_split_end, ..]);
 
-        let lhs = w.dot(g_r);
-        println!("lhs {}", lhs);
+        if !(w.dot(g_r) == vandermonte_matrix_g.t().dot(&z_r.to_owned())) {
+            return Err(Error::Custom("W.g_r = G.z_r check failed".to_string()));
+        }
 
-        let rhs = vandermonte_matrix_g
-            .slice(s![row_split_start..row_split_end, ..])
-            .dot(&z_r.to_owned());
-        println!("RHS {:?}", rhs);
+        let lhs = y.t().dot(g_r_2);
+        println!("lhs {:?}", lhs);
+
+        let rhs = vandermonte_matrix_g.dot(&z_r_2.to_owned());
+
+        println!("rhs {:?}", rhs);
 
         // TODO: check shapes
         // assert_eq!(
