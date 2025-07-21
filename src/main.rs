@@ -63,32 +63,52 @@ fn main() {
 
     let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
 
-    let row_split_start = 0_usize;
-    let row_split_end = 2_usize;
-    let col_split = 0_usize;
-    let col_split_end = 2_usize;
-    let sample_w = vals
-        .z
-        .slice(s![row_split_start..row_split_end, ..])
-        .to_owned();
+    let n = original_grid.grid.nrows(); // assuming square matrix
+    let num_samples = 20; // how many random samples you want
 
-    let sample_y = vals
-        .z
-        .slice(s![.., col_split..col_split_end])
-        .t()
-        .to_owned();
+    let mut rng = rand::thread_rng();
 
-    let i = original_grid.variant.sample_vandermonte(
-        original_grid.grid.nrows(),
-        row_split_start,
-        row_split_end,
-        &vals.z_r,
-        &vals.z_r_2,
-        &sample_w,
-        &sample_y.to_owned(),
-        &vals.tilde_g_r.1,
-        &vals.tilde_g_r_2.1,
-    );
+    for _ in 0..num_samples {
+        // Pick random start indices for rows and columns
+        let row_split_start = rng.gen_range(0..(n - 1));
+        let row_split_end = row_split_start + 2;
+        let col_split_start = rng.gen_range(0..(n - 1));
+        let col_split_end = col_split_start + 2;
 
-    println!("{:?}", i);
+        let sample_w = vals
+            .z
+            .slice(s![row_split_start..row_split_end, ..])
+            .to_owned();
+
+        let sample_y = vals
+            .z
+            .slice(s![.., col_split_start..col_split_end])
+            .t()
+            .to_owned();
+
+        let result = original_grid.variant.sample_vandermonte(
+            n,
+            row_split_start,
+            row_split_end,
+            col_split_start,
+            col_split_end,
+            &vals.z_r,
+            &vals.z_r_2,
+            &sample_w,
+            &sample_y,
+            &vals.tilde_g_r.1,
+            &vals.tilde_g_r_2.1,
+        );
+
+        match result {
+            Ok(_) => println!(
+                "PASS: rows [{}..{}), cols [{}..{})",
+                row_split_start, row_split_end, col_split_start, col_split_end
+            ),
+            Err(e) => println!(
+                "FAIL: rows [{}..{}), cols [{}..{}): {:?}",
+                row_split_start, row_split_end, col_split_start, col_split_end, e
+            ),
+        }
+    }
 }
