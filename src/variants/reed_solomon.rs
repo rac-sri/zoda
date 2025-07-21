@@ -23,12 +23,36 @@ impl ReedSolomon {
         &self,
         alphas: &Vec<F>,
         k: usize,
+        n: usize,
     ) -> Result<Matrix<F>, Error> {
-        let matrix: Vec<Vec<F>> = (0..k)
-            .map(|i| alphas.iter().map(|&a| a.pow(&[i as u64])).collect())
-            .collect();
+        if alphas.len() != n {
+            return Err(Error::Custom(format!(
+                "alphas length {} must match codeword length n {}",
+                alphas.len(),
+                n
+            )));
+        }
+        if k > n {
+            return Err(Error::Custom(
+                "Message length k cannot be greater than codeword length n".to_string(),
+            ));
+        }
 
-        create_matrix!(matrix, matrix.len(), matrix[0].len())
+        // Build the full k x n Vandermonde matrix V.
+        let vandermonde_rows: Vec<Vec<F>> = (0..k)
+            .map(|i| alphas.iter().map(|alpha| alpha.pow([i as u64])).collect())
+            .collect();
+        let vandermonde_matrix = create_matrix!(vandermonde_rows, k, n)?;
+
+        // Take the first k alphas to form the square Vandermonde matrix V_sys,
+        // which is the first k columns of V.
+        let sys_alphas: Vec<F> = alphas.iter().take(k).cloned().collect();
+
+        // Invert V_sys using your existing Lagrange-based inversion method.
+        let v_sys_inv = self.invert_vandermonde_matrix(&sys_alphas)?;
+
+        // The systematic generator matrix G = V_sys_inv * V.
+        Ok(v_sys_inv.dot(&vandermonde_matrix))
     }
 
     pub fn invert_vandermonde_matrix<F: Field>(&self, alphas: &Vec<F>) -> Result<Matrix<F>, Error> {

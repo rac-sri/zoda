@@ -63,10 +63,9 @@ where
         }
 
         let tilde_g_r = self.random_vec(z.nrows(), 1)?;
+        let tilde_g_r_2 = self.random_vec(z.nrows(), 1)?;
 
-        let tilde_g_r_2 = self.random_vec(1, z.ncols())?;
-
-        let z_r = z.slice(s![0..original_grid.nrows(), ..]).dot(&tilde_g_r.1);
+        let z_r = original_grid.dot(&G.to_owned()).dot(&tilde_g_r.1);
 
         println!("z_r {:?}", z_r);
         let z_r_2 = z
@@ -109,8 +108,8 @@ where
         let tilde_g_r_2 = self.random_vec(original_grid.ncols(), original_grid.ncols())?;
 
         let n = original_grid.ncols();
-        let z_r = z.slice(s![0..n, n..2 * n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
-        let z_r_2 = z.slice(s![n..2 * n, 0..n]).t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
+        let z_r = z.slice(s![.., 0..n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
+        let z_r_2 = z.slice(s![n..2 * n, ..]).t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
 
         Ok(TensorVariantEncodingResult {
             z,
@@ -129,34 +128,17 @@ where
     ) -> Result<(Matrix<F>, Matrix<F>), Error> {
         let n = original_grid.nrows();
 
-        let mut matrix_tensor = Matrix::<F>::zeros((n * 2, n * 2));
+        let alphas = self.rs.alphas_with_generator(2 * n, self.generator);
 
-        // calculate Z = GXG'
-        matrix_tensor
-            .slice_mut(s![0..n, 0..n])
-            .assign(&original_grid);
+        let g = self.rs.vandermonde_matrix(&alphas, n, 2 * n)?; // cache this as an optimisation
 
-        let alphas = self.rs.alphas_with_generator(n, self.generator);
-
-        let g = self.rs.vandermonde_matrix(&alphas, n)?; // cache this as an optimisation
         let tilde_g = g.t().to_owned();
 
-        let row_encoding = self.rs.rs_encode(&g, &original_grid)?;
+        let row_encoding = self.rs.rs_encode(&original_grid, &g)?;
 
-        matrix_tensor
-            .slice_mut(s![0..n, n..2 * n])
-            .assign(&row_encoding);
+        let col_encoding = self.rs.rs_encode(&tilde_g, &row_encoding)?;
 
-        let col_encoding = self.rs.rs_encode(&original_grid, &tilde_g)?;
-
-        matrix_tensor
-            .slice_mut(s![n..2 * n, 0..n])
-            .assign(&col_encoding);
-
-        let q4 = self.rs.rs_encode(&row_encoding, &tilde_g)?;
-
-        matrix_tensor.slice_mut(s![n..2 * n, n..2 * n]).assign(&q4);
-        Ok((matrix_tensor, g))
+        Ok((col_encoding, g))
     }
 
     fn tensor_encode_fft(&self, original_grid: &Matrix<F>) -> Result<Matrix<F>, Error>
@@ -336,8 +318,8 @@ where
         g_r: &Matrix<F>,
         g_r_2: &Matrix<F>,
     ) -> Result<bool, Error> {
-        let alphas = self.rs.alphas_with_generator(n, self.generator);
-        let vandermonte_matrix_g = self.rs.vandermonde_matrix(&alphas, n)?; // cache this as an optimisation
+        let alphas = self.rs.alphas_with_generator(2 * n, self.generator);
+        let vandermonte_matrix_g = self.rs.vandermonde_matrix(&alphas, n, 2 * n)?; // cache this as an optimisation
 
         // 1. match and verify the commitments
 
@@ -347,18 +329,9 @@ where
         let lhs = w.dot(g_r);
         println!("lhs {}", lhs);
 
-        println!("{:?}", &vandermonte_matrix_g.slice(s![.., 0..1]));
-
-        println!(
-            "encoding {:?}",
-            self.rs.rs_encode(
-                &z_r,
-                &vandermonte_matrix_g.slice(s![0..1, 0..1]).t().to_owned()
-            )?
-        );
-
-        println!("vandermont {}", vandermonte_matrix_g);
-        let rhs = z_r.dot(&vandermonte_matrix_g.slice(s![.., 0..1]));
+        let rhs = vandermonte_matrix_g
+            .slice(s![row_split_start..row_split_end, ..])
+            .dot(&z_r.to_owned());
         println!("RHS {:?}", rhs);
 
         // TODO: check shapes

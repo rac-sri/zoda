@@ -18,10 +18,10 @@ use crate::{
 fn main() {
     let matrix = arr2(&[
         [
-            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(11_u8)),
+            Fq::new(BigInt::from(32_u8)),
             Fq::new(BigInt::from(3_u8)),
-            Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(3_u8)),
+            Fq::new(BigInt::from(13_u8)),
         ],
         [
             Fq::new(BigInt::from(1_u8)),
@@ -64,7 +64,7 @@ fn main() {
     let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
 
     let row_split_start = 0_usize;
-    let row_split_end = 4_usize;
+    let row_split_end = 1_usize;
     let col_split = 0_usize;
     let col_split_end = 3_usize;
     let sample_w = vals
