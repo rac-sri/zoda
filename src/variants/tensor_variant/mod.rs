@@ -67,8 +67,8 @@ where
 
         let z_r = original_grid.dot(&G.to_owned()).dot(&tilde_g_r.1);
 
-        let z_r_2 = original_grid.dot(&G.to_owned()).dot(&tilde_g_r_2.1);
-
+        let z_r_2 = G.t().dot(&original_grid.to_owned()).t().dot(&tilde_g_r_2.1);
+        println!("z_r_w {:?}", z_r_2);
         Ok(TensorVariantEncodingResult {
             z,
             z_r,
@@ -314,7 +314,7 @@ where
         y: &Matrix<F>,
         g_r: &Matrix<F>,
         g_r_2: &Matrix<F>,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         let alphas = self.rs.alphas_with_generator(2 * n, self.generator);
         let vandermonte_matrix_g = self.rs.vandermonde_matrix(&alphas, n, 2 * n)?; // cache this as an optimisation
 
@@ -324,34 +324,32 @@ where
         // let g_r = g_r.slice(s![row_split_start..row_split_end, ..]);
 
         if !(w.dot(g_r) == vandermonte_matrix_g.t().dot(&z_r.to_owned())) {
-            return Err(Error::Custom("W.g_r = G.z_r check failed".to_string()));
+            return Err(Error::Custom(
+                "Check 1: W.g_r = G.z_r check failed".to_string(),
+            ));
         }
 
-        if !(y.t().dot(g_r_2) == vandermonte_matrix_g.t().dot(&z_r_2.to_owned())) {
-            return Err(Error::Custom("W.g_r = G.z_r check failed".to_string()));
+        if !(y.dot(g_r_2) == vandermonte_matrix_g.t().dot(&z_r_2.to_owned())) {
+            return Err(Error::Custom(
+                "Check 2: (Y^T).g'_r' = G'.z_r' check failed".to_string(),
+            ));
         }
 
-        let lhs = g_r_2
+        if !(g_r_2
             .t()
             .dot(&vandermonte_matrix_g.t())
-            .dot(&z_r.to_owned());
-        println!("lhs {:?}", lhs);
+            .dot(&z_r.to_owned())
+            == g_r
+                .t()
+                .dot(&vandermonte_matrix_g.t())
+                .dot(&z_r_2.to_owned()))
+        {
+            return Err(Error::Custom(
+                "Check 3: g'^T_r'.G.z_r = g_r^T.G'.z'_r' failed".to_string(),
+            ));
+        }
 
-        let rhs = g_r
-            .t()
-            .dot(&vandermonte_matrix_g.t())
-            .dot(&z_r_2.to_owned());
-
-        println!("rhs {:?}", rhs);
-        // TODO: check shapes
-        // assert_eq!(
-        //     w.dot(&g_r),
-        //     vandermonte_matrix_g
-        //         .slice(s![row_split_start..row_split_end, ..])
-        //         .dot(z_r)
-        // );
-
-        Ok(true)
+        Ok(())
     }
 }
 
