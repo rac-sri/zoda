@@ -5,7 +5,7 @@ use ark_crypto_primitives::{
         injective_map::{PedersenCRHCompressor, PedersenTwoToOneCRHCompressor, TECompressor},
         pedersen,
     },
-    merkle_tree::{ByteDigestConverter, Config, LeafParam, MerkleTree, Path, TwoToOneParam},
+    merkle_tree::{ByteDigestConverter, Config, MerkleTree, Path},
 };
 use ark_ed_on_bls12_381::EdwardsProjective as CurveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};

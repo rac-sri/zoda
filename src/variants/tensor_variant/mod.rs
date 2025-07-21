@@ -378,3 +378,186 @@ pub struct TensorVariantEncodingResult<F> {
     pub row_wise_commits: Vec<Vec<u8>>,
     pub col_wise_commits: Vec<Vec<u8>>,
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        commitments::merkle_commitment::{ACMerkleTree, LeafHash, TwoToOneHash},
+        grid::DataGrid,
+        variants,
+    };
+    use ark_crypto_primitives::crh::{CRHScheme, TwoToOneCRHScheme};
+    use ark_ff::BigInt;
+    use ark_serialize::CanonicalSerialize;
+    use ndarray::{arr2, s};
+    use rand::{Rng, thread_rng};
+
+    use ark_bls12_381::Fr as Fq;
+
+    fn generate_mock_grid() -> Matrix<Fq> {
+        let matrix = arr2(&[
+            [
+                Fq::new(BigInt::from(11_u8)),
+                Fq::new(BigInt::from(32_u8)),
+                Fq::new(BigInt::from(3_u8)),
+                Fq::new(BigInt::from(13_u8)),
+            ],
+            [
+                Fq::new(BigInt::from(1_u8)),
+                Fq::new(BigInt::from(4_u8)),
+                Fq::new(BigInt::from(1_u8)),
+                Fq::new(BigInt::from(3_u8)),
+            ],
+            [
+                Fq::new(BigInt::from(1_u8)),
+                Fq::new(BigInt::from(3_u8)),
+                Fq::new(BigInt::from(1_u8)),
+                Fq::new(BigInt::from(3_u8)),
+            ],
+            [
+                Fq::new(BigInt::from(1_u8)),
+                Fq::new(BigInt::from(4_u8)),
+                Fq::new(BigInt::from(1_u8)),
+                Fq::new(BigInt::from(3_u8)),
+            ],
+        ]);
+
+        matrix
+    }
+
+    #[test]
+    fn test_tensor_variant_encoding_result() {
+        let matrix = generate_mock_grid();
+        let mut leaves: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..4 {
+            let fq = Fq::new(BigInt::from(1_u8));
+            let mut buf = Vec::new();
+            fq.serialize_uncompressed(&mut buf).unwrap();
+            leaves.push(buf);
+        }
+
+        let mut rng = thread_rng();
+        let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
+        let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
+
+        let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
+        let tensor_obj = variants::tensor_variant::TensorVariant::new(Fq::GENERATOR, ac_commit);
+
+        let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
+        original_grid.encode().unwrap();
+
+        let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
+
+        let n = original_grid.grid.nrows(); // assuming square matrix
+        let num_samples = 20; // how many random samples you want
+
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..num_samples {
+            // Pick random start indices for rows and columns
+            let row_split_start = rng.gen_range(0..(n - 1));
+            let row_split_end = row_split_start + 2;
+            let col_split_start = rng.gen_range(0..(n - 1));
+            let col_split_end = col_split_start + 2;
+
+            let sample_w = vals
+                .z
+                .slice(s![row_split_start..row_split_end, ..])
+                .to_owned();
+
+            let sample_y = vals
+                .z
+                .slice(s![.., col_split_start..col_split_end])
+                .t()
+                .to_owned();
+
+            let result = original_grid.variant.sample_vandermonte(
+                n,
+                row_split_start,
+                row_split_end,
+                col_split_start,
+                col_split_end,
+                &vals.z_r,
+                &vals.z_r_2,
+                &sample_w,
+                &sample_y,
+                &vals.tilde_g_r.1,
+                &vals.tilde_g_r_2.1,
+            );
+
+            assert!(result.is_ok(), "Random sample failed: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_tensor_variant_sampling_failure_on_incorrect_data() {
+        let matrix = generate_mock_grid();
+        let mut leaves: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..4 {
+            let fq = Fq::new(BigInt::from(1_u8));
+            let mut buf = Vec::new();
+            fq.serialize_uncompressed(&mut buf).unwrap();
+            leaves.push(buf);
+        }
+
+        let mut rng = thread_rng();
+        let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
+        let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
+
+        let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
+        let tensor_obj = variants::tensor_variant::TensorVariant::new(Fq::GENERATOR, ac_commit);
+
+        let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
+        original_grid.encode().unwrap();
+
+        // Mutate the encoded data
+        let vals = original_grid.variant.tensor_cache.as_mut().unwrap();
+        vals.z[[0, 0]] += Fq::from(1u64); // Corrupt the first element
+
+        // Copy the data you need
+        let z = vals.z.clone();
+        let z_r = vals.z_r.clone();
+        let z_r_2 = vals.z_r_2.clone();
+        let tilde_g_r = vals.tilde_g_r.1.clone();
+        let tilde_g_r_2 = vals.tilde_g_r_2.1.clone();
+
+        // Now the mutable borrow is dropped, you can call methods on original_grid.variant
+        let n = original_grid.grid.nrows();
+        let num_samples = 100;
+        let mut rng = rand::thread_rng();
+        let mut any_failed = false;
+
+        for _ in 0..num_samples {
+            let row_split_start = rng.gen_range(0..(n - 1));
+            let row_split_end = row_split_start + 2;
+            let col_split_start = rng.gen_range(0..(n - 1));
+            let col_split_end = col_split_start + 2;
+
+            let sample_w = z.slice(s![row_split_start..row_split_end, ..]).to_owned();
+            let sample_y = z
+                .slice(s![.., col_split_start..col_split_end])
+                .t()
+                .to_owned();
+
+            let result = original_grid.variant.sample_vandermonte(
+                n,
+                row_split_start,
+                row_split_end,
+                col_split_start,
+                col_split_end,
+                &z_r,
+                &z_r_2,
+                &sample_w,
+                &sample_y,
+                &tilde_g_r,
+                &tilde_g_r_2,
+            );
+
+            if result.is_err() {
+                any_failed = true;
+            }
+        }
+
+        assert!(any_failed, "Sampling did not fail on corrupted data!");
+    }
+}
