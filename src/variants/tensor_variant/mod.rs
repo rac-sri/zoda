@@ -55,8 +55,8 @@ where
         let (z, G) = self.tensor_encode_vandermonde(&original_grid)?;
 
         let mut commitment_scheme = self.commitment.clone();
-        let row_wise_commits = { self.row_wise_commit(&z, &mut commitment_scheme) };
-        let col_wise_commits = { self.col_wise_commit(&z, &mut commitment_scheme) };
+        let row_wise_commits = self.row_wise_commit(&z, &mut commitment_scheme);
+        let col_wise_commits = self.col_wise_commit(&z, &mut commitment_scheme);
 
         if original_grid.nrows() != original_grid.ncols() {
             return Err(Error::MatrixDimsMismatch);
@@ -67,48 +67,7 @@ where
 
         let z_r = original_grid.dot(&G.to_owned()).dot(&tilde_g_r.1);
 
-        println!("z_r {:?}", z_r);
-
-        let z_r_2 = G.t().dot(original_grid).t().dot(&tilde_g_r.1);
-        println!("z_r_2 {:?}", z_r_2);
-        Ok(TensorVariantEncodingResult {
-            z,
-            z_r,
-            z_r_2,
-            tilde_g_r,
-            tilde_g_r_2,
-            row_wise_commits,
-            col_wise_commits,
-        })
-    }
-
-    #[allow(non_snake_case)]
-    pub fn encode_fft(
-        &self,
-        original_grid: &Matrix<F>,
-    ) -> Result<TensorVariantEncodingResult<F>, Error>
-    where
-        C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>>,
-        C::Commitment: std::convert::Into<Vec<u8>>,
-        F: FftField,
-    {
-        let z = self.tensor_encode_fft(&original_grid)?;
-
-        let mut commitment = self.commitment.clone();
-        let row_wise_commits = self.row_wise_commit(&z, &mut commitment);
-        let col_wise_commits = self.col_wise_commit(&z, &mut commitment);
-
-        if original_grid.nrows() != original_grid.ncols() {
-            return Err(Error::MatrixDimsMismatch);
-        }
-
-        let tilde_g_r = self.random_vec(original_grid.nrows(), original_grid.ncols())?;
-        let tilde_g_r_2 = self.random_vec(original_grid.ncols(), original_grid.ncols())?;
-
-        let n = original_grid.ncols();
-        let z_r = z.slice(s![.., 0..n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
-
-        let z_r_2 = z.slice(s![n..2 * n, ..]).t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
+        let z_r_2 = original_grid.dot(&G.to_owned()).dot(&tilde_g_r_2.1);
 
         Ok(TensorVariantEncodingResult {
             z,
@@ -120,6 +79,45 @@ where
             col_wise_commits,
         })
     }
+
+    // #[allow(non_snake_case)]
+    // pub fn encode_fft(
+    //     &self,
+    //     original_grid: &Matrix<F>,
+    // ) -> Result<TensorVariantEncodingResult<F>, Error>
+    // where
+    //     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>>,
+    //     C::Commitment: std::convert::Into<Vec<u8>>,
+    //     F: FftField,
+    // {
+    //     let z = self.tensor_encode_fft(&original_grid)?;
+
+    //     let mut commitment = self.commitment.clone();
+    //     let row_wise_commits = self.row_wise_commit(&z, &mut commitment);
+    //     let col_wise_commits = self.col_wise_commit(&z, &mut commitment);
+
+    //     if original_grid.nrows() != original_grid.ncols() {
+    //         return Err(Error::MatrixDimsMismatch);
+    //     }
+
+    //     let tilde_g_r = self.random_vec(original_grid.nrows(), original_grid.ncols())?;
+    //     let tilde_g_r_2 = self.random_vec(original_grid.ncols(), original_grid.ncols())?;
+
+    //     let n = original_grid.ncols();
+    //     let z_r = z.slice(s![.., 0..n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
+
+    //     let z_r_2 = z.slice(s![0..n, ..]).t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
+
+    //     Ok(TensorVariantEncodingResult {
+    //         z,
+    //         z_r,
+    //         z_r_2,
+    //         tilde_g_r,
+    //         tilde_g_r_2,
+    //         row_wise_commits,
+    //         col_wise_commits,
+    //     })
+    // }
 
     fn tensor_encode_vandermonde(
         &self,
@@ -140,64 +138,64 @@ where
         Ok((col_encoding, g))
     }
 
-    fn tensor_encode_fft(&self, original_grid: &Matrix<F>) -> Result<Matrix<F>, Error>
-    where
-        F: FftField,
-    {
-        let n = original_grid.nrows();
-        let mut matrix_tensor = Matrix::<F>::zeros((n * 2, n * 2));
+    // fn tensor_encode_fft(&self, original_grid: &Matrix<F>) -> Result<Matrix<F>, Error>
+    // where
+    //     F: FftField,
+    // {
+    //     let n = original_grid.nrows();
+    //     let mut matrix_tensor = Matrix::<F>::zeros((n * 2, n * 2));
 
-        matrix_tensor
-            .slice_mut(s![0..n, 0..n])
-            .assign(&original_grid);
+    //     matrix_tensor
+    //         .slice_mut(s![0..n, 0..n])
+    //         .assign(&original_grid);
 
-        // row wise commitment
-        let encoded_rows: Vec<Vec<F>> = original_grid
-            .rows()
-            .into_iter()
-            .map(|row| self.rs.rs_encode_fft(&row.to_vec()))
-            .collect::<Result<_, _>>()?;
+    //     // row wise commitment
+    //     let encoded_rows: Vec<Vec<F>> = original_grid
+    //         .rows()
+    //         .into_iter()
+    //         .map(|row| self.rs.rs_encode_fft(&row.to_vec()))
+    //         .collect::<Result<_, _>>()?;
 
-        let encoded_rows_matrix =
-            create_matrix!(encoded_rows, encoded_rows.len(), encoded_rows[0].len())?;
+    //     let encoded_rows_matrix =
+    //         create_matrix!(encoded_rows, encoded_rows.len(), encoded_rows[0].len())?;
 
-        matrix_tensor
-            .slice_mut(s!(0..n, n..2 * n))
-            .assign(&encoded_rows_matrix);
+    //     matrix_tensor
+    //         .slice_mut(s!(0..n, n..2 * n))
+    //         .assign(&encoded_rows_matrix);
 
-        // encode q1 column wise
-        let encoded_cols: Vec<Vec<F>> = original_grid
-            .columns()
-            .into_iter()
-            .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
-            .collect::<Result<_, _>>()?;
+    //     // encode q1 column wise
+    //     let encoded_cols: Vec<Vec<F>> = original_grid
+    //         .columns()
+    //         .into_iter()
+    //         .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
+    //         .collect::<Result<_, _>>()?;
 
-        let encoded_cols_matrix =
-            create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?;
+    //     let encoded_cols_matrix =
+    //         create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?;
 
-        matrix_tensor
-            .slice_mut(s!(n..2 * n, 0..n))
-            .assign(&encoded_cols_matrix);
+    //     matrix_tensor
+    //         .slice_mut(s!(n..2 * n, 0..n))
+    //         .assign(&encoded_cols_matrix);
 
-        // encode q2 column wise
-        let encoded_q2_cols: Vec<Vec<F>> = encoded_rows_matrix
-            .columns()
-            .into_iter()
-            .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
-            .collect::<Result<_, _>>()?;
+    //     // encode q2 column wise
+    //     let encoded_q2_cols: Vec<Vec<F>> = encoded_rows_matrix
+    //         .columns()
+    //         .into_iter()
+    //         .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
+    //         .collect::<Result<_, _>>()?;
 
-        let encoded_q2_cols_matrix = create_matrix!(
-            encoded_q2_cols,
-            encoded_q2_cols.len(),
-            encoded_q2_cols[0].len()
-        )?;
+    //     let encoded_q2_cols_matrix = create_matrix!(
+    //         encoded_q2_cols,
+    //         encoded_q2_cols.len(),
+    //         encoded_q2_cols[0].len()
+    //     )?;
 
-        matrix_tensor
-            .slice_mut(s!(n..2 * n, n..2 * n))
-            .assign(&encoded_q2_cols_matrix);
+    //     matrix_tensor
+    //         .slice_mut(s!(n..2 * n, n..2 * n))
+    //         .assign(&encoded_q2_cols_matrix);
 
-        Ok(matrix_tensor)
-    }
+    //     Ok(matrix_tensor)
+    // }
 
     fn row_wise_commit(
         &self,
@@ -329,13 +327,22 @@ where
             return Err(Error::Custom("W.g_r = G.z_r check failed".to_string()));
         }
 
-        let lhs = y.t().dot(g_r_2);
+        if !(y.t().dot(g_r_2) == vandermonte_matrix_g.t().dot(&z_r_2.to_owned())) {
+            return Err(Error::Custom("W.g_r = G.z_r check failed".to_string()));
+        }
+
+        let lhs = g_r_2
+            .t()
+            .dot(&vandermonte_matrix_g.t())
+            .dot(&z_r.to_owned());
         println!("lhs {:?}", lhs);
 
-        let rhs = vandermonte_matrix_g.dot(&z_r_2.to_owned());
+        let rhs = g_r
+            .t()
+            .dot(&vandermonte_matrix_g.t())
+            .dot(&z_r_2.to_owned());
 
         println!("rhs {:?}", rhs);
-
         // TODO: check shapes
         // assert_eq!(
         //     w.dot(&g_r),
