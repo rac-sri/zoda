@@ -1,7 +1,7 @@
 use ark_ff::fields::Field;
 use ndarray::Array2 as Matrix;
 
-use crate::{encoding::Variant, error::Error};
+use crate::{error::Error, variants::Variant};
 
 pub struct DataGrid<F, V> {
     pub grid: Matrix<F>,

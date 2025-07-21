@@ -1,8 +1,7 @@
-use crate::commitments;
-use crate::encoding::Variant;
+use crate::variants::Variant;
 use crate::{
-    commitments::ACCommitmentScheme, create_matrix, encoding::reed_solomon::ReedSolomon,
-    error::Error,
+    commitments::ACCommitmentScheme, create_matrix, error::Error,
+    variants::reed_solomon::ReedSolomon,
 };
 use ark_ff::{FftField, Field};
 use ndarray::{Array2 as Matrix, s};
@@ -63,11 +62,17 @@ where
             return Err(Error::MatrixDimsMismatch);
         }
 
-        let tilde_g_r = self.diagnol_matrix_gen(original_grid.nrows(), original_grid.ncols())?;
-        let tilde_g_r_2 = self.diagnol_matrix_gen(original_grid.ncols(), original_grid.ncols())?;
+        let tilde_g_r = self.random_vec(z.nrows(), 1)?;
 
-        let z_r = original_grid.dot(&G.t().to_owned()).dot(&tilde_g_r.1);
-        let z_r_2 = original_grid.t().dot(&G.t()).dot(&tilde_g_r_2.1);
+        let tilde_g_r_2 = self.random_vec(1, z.ncols())?;
+
+        let z_r = z.slice(s![0..original_grid.nrows(), ..]).dot(&tilde_g_r.1);
+
+        println!("z_r {:?}", z_r);
+        let z_r_2 = z
+            .slice(s![.., 0..original_grid.ncols()])
+            .t()
+            .dot(&tilde_g_r.1);
 
         Ok(TensorVariantEncodingResult {
             z,
@@ -100,8 +105,8 @@ where
             return Err(Error::MatrixDimsMismatch);
         }
 
-        let tilde_g_r = self.diagnol_matrix_gen(original_grid.nrows(), original_grid.ncols())?;
-        let tilde_g_r_2 = self.diagnol_matrix_gen(original_grid.ncols(), original_grid.ncols())?;
+        let tilde_g_r = self.random_vec(original_grid.nrows(), original_grid.ncols())?;
+        let tilde_g_r_2 = self.random_vec(original_grid.ncols(), original_grid.ncols())?;
 
         let n = original_grid.ncols();
         let z_r = z.slice(s![0..n, n..2 * n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
@@ -133,26 +138,25 @@ where
 
         let alphas = self.rs.alphas_with_generator(n, self.generator);
 
-        let vandermonte_matrix_g = self.rs.vandermonde_matrix(&alphas, n)?; // cache this as an optimisation
+        let g = self.rs.vandermonde_matrix(&alphas, n)?; // cache this as an optimisation
+        let tilde_g = g.t().to_owned();
 
-        let row_encoding = self.rs.rs_encode(&original_grid, &vandermonte_matrix_g)?;
+        let row_encoding = self.rs.rs_encode(&g, &original_grid)?;
 
         matrix_tensor
             .slice_mut(s![0..n, n..2 * n])
             .assign(&row_encoding);
 
-        let col_encoding = self
-            .rs
-            .rs_encode(&vandermonte_matrix_g.t().to_owned(), &original_grid)?;
+        let col_encoding = self.rs.rs_encode(&original_grid, &tilde_g)?;
 
         matrix_tensor
             .slice_mut(s![n..2 * n, 0..n])
             .assign(&col_encoding);
 
-        let q4 = self.rs.rs_encode(&col_encoding, &vandermonte_matrix_g)?;
+        let q4 = self.rs.rs_encode(&row_encoding, &tilde_g)?;
 
         matrix_tensor.slice_mut(s![n..2 * n, n..2 * n]).assign(&q4);
-        Ok((matrix_tensor, vandermonte_matrix_g))
+        Ok((matrix_tensor, g))
     }
 
     fn tensor_encode_fft(&self, original_grid: &Matrix<F>) -> Result<Matrix<F>, Error>
@@ -278,52 +282,98 @@ where
         commitment_vec
     }
 
-    fn diagnol_matrix_gen(&self, rows: usize, cols: usize) -> Result<(Vec<u8>, Matrix<F>), Error> {
-        if rows != cols {
-            return Err(Error::MatrixShapeError(format!(
-                "Rows {} : Cols {}",
-                rows, cols
-            )));
-        }
-
-        let mut diagonal_matrix = Matrix::<F>::zeros((rows, cols));
+    fn random_vec(&self, rows: usize, cols: usize) -> Result<(Vec<u8>, Matrix<F>), Error> {
+        let mut random_matrix = Matrix::<F>::zeros((rows, cols));
         let mut combined_transcript = Vec::new();
 
         for i in 0..rows {
-            // Create a fresh domain separator for each element
-            let domain_separator =
-                DomainSeparator::<DefaultHash>::new(TENSOR_VARIANT_DOMAIN_SEPARATOR)
-                    .absorb(32, "↪️")
-                    .squeeze(16, "↩️");
+            for j in 0..cols {
+                // Create a fresh domain separator for each element
+                let domain_separator =
+                    DomainSeparator::<DefaultHash>::new(TENSOR_VARIANT_DOMAIN_SEPARATOR)
+                        .absorb(32, "↪️")
+                        .squeeze(16, "↩️");
 
-            let mut prover_state = domain_separator.to_prover_state();
+                let mut prover_state = domain_separator.to_prover_state();
 
-            diagonal_matrix[(i, i)] = F::rand(prover_state.rng());
+                random_matrix[(i, j)] = F::rand(prover_state.rng());
 
-            let mut dest = Vec::new();
-            diagonal_matrix[(i, i)]
-                .serialize_uncompressed(&mut dest)
-                .unwrap(); // TODO: handle error
+                let mut dest = Vec::new();
+                random_matrix[(i, j)]
+                    .serialize_uncompressed(&mut dest)
+                    .unwrap(); // TODO: handle error
 
-            // Absorb the bytes
-            prover_state
-                .add_bytes(&dest)
-                .map_err(|e| Error::Custom(e.to_string()))?;
+                // Absorb the bytes
+                prover_state
+                    .add_bytes(&dest)
+                    .map_err(|e| Error::Custom(e.to_string()))?;
 
-            // Generate challenge
-            let mut chal = [0u8; 16];
-            prover_state
-                .fill_challenge_bytes(&mut chal)
-                .map_err(|e| Error::Custom(e.to_string()))?;
+                // Generate challenge
+                let mut chal = [0u8; 16];
+                prover_state
+                    .fill_challenge_bytes(&mut chal)
+                    .map_err(|e| Error::Custom(e.to_string()))?;
 
-            // Collect transcript
-            combined_transcript.extend_from_slice(&prover_state.narg_string());
+                // Collect transcript
+                combined_transcript.extend_from_slice(&prover_state.narg_string());
+            }
         }
 
-        Ok((combined_transcript, diagonal_matrix))
+        Ok((combined_transcript, random_matrix))
+    }
+
+    pub fn sample_vandermonte(
+        &self,
+        n: usize,
+        row_split_start: usize,
+        row_split_end: usize,
+        col_split_start: usize,
+        col_split_end: usize,
+        z_r: &Matrix<F>,
+        z_r_2: &Matrix<F>,
+        w: &Matrix<F>,
+        y: &Matrix<F>,
+        g_r: &Matrix<F>,
+        g_r_2: &Matrix<F>,
+    ) -> Result<bool, Error> {
+        let alphas = self.rs.alphas_with_generator(n, self.generator);
+        let vandermonte_matrix_g = self.rs.vandermonde_matrix(&alphas, n)?; // cache this as an optimisation
+
+        // 1. match and verify the commitments
+
+        // 2. check W.g_r = G.z_r
+        // let g_r = g_r.slice(s![row_split_start..row_split_end, ..]);
+
+        let lhs = w.dot(g_r);
+        println!("lhs {}", lhs);
+
+        println!("{:?}", &vandermonte_matrix_g.slice(s![.., 0..1]));
+
+        println!(
+            "encoding {:?}",
+            self.rs.rs_encode(
+                &z_r,
+                &vandermonte_matrix_g.slice(s![0..1, 0..1]).t().to_owned()
+            )?
+        );
+
+        println!("vandermont {}", vandermonte_matrix_g);
+        let rhs = z_r.dot(&vandermonte_matrix_g.slice(s![.., 0..1]));
+        println!("RHS {:?}", rhs);
+
+        // TODO: check shapes
+        // assert_eq!(
+        //     w.dot(&g_r),
+        //     vandermonte_matrix_g
+        //         .slice(s![row_split_start..row_split_end, ..])
+        //         .dot(z_r)
+        // );
+
+        Ok(true)
     }
 }
 
+#[derive(Clone)]
 pub struct TensorVariantEncodingResult<F> {
     pub z: Matrix<F>,
     pub z_r: Matrix<F>,

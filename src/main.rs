@@ -1,8 +1,7 @@
 mod commitments;
-mod encoding;
 pub(crate) mod error;
 mod grid;
-mod sampling;
+mod variants;
 
 use ark_bls12_381::Fr as Fq;
 
@@ -21,26 +20,26 @@ fn main() {
         [
             Fq::new(BigInt::from(1_u8)),
             Fq::new(BigInt::from(3_u8)),
-            Fq::new(BigInt::from(4_u8)),
-            Fq::new(BigInt::from(6_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(3_u8)),
         ],
         [
             Fq::new(BigInt::from(1_u8)),
             Fq::new(BigInt::from(4_u8)),
-            Fq::new(BigInt::from(7_u8)),
-            Fq::new(BigInt::from(8_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(3_u8)),
         ],
         [
             Fq::new(BigInt::from(1_u8)),
             Fq::new(BigInt::from(3_u8)),
-            Fq::new(BigInt::from(8_u8)),
-            Fq::new(BigInt::from(5_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(3_u8)),
         ],
         [
             Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(2_u8)),
-            Fq::new(BigInt::from(6_u8)),
-            Fq::new(BigInt::from(8_u8)),
+            Fq::new(BigInt::from(4_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(3_u8)),
         ],
     ]);
 
@@ -57,19 +56,45 @@ fn main() {
     let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
     let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-    let tensor_obj = encoding::tensor_variant::TensorVariant::new(Fq::GENERATOR, ac_commit);
+    let tensor_obj = variants::tensor_variant::TensorVariant::new(Fq::GENERATOR, ac_commit);
 
     let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
     let i = original_grid.encode().unwrap();
 
-    println!("Vandermote encodeing: {:?}", i);
+    let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
 
-    println!(
-        "FFT encoding: {:?}",
-        original_grid
-            .variant
-            .encode_fft(&original_grid.grid)
-            .unwrap()
-            .z
+    let row_split_start = 0_usize;
+    let row_split_end = 4_usize;
+    let col_split = 0_usize;
+    let col_split_end = 3_usize;
+    let sample_w = vals
+        .z
+        .slice(s![row_split_start..row_split_end, ..])
+        .to_owned();
+
+    let sample_y = vals.z.slice(s![.., col_split..col_split_end]).to_owned();
+
+    let i = original_grid.variant.sample_vandermonte(
+        original_grid.grid.nrows(),
+        row_split_start,
+        row_split_end,
+        col_split,
+        col_split_end,
+        &vals.z_r,
+        &vals.z_r_2,
+        &sample_w,
+        &sample_y,
+        &vals.tilde_g_r.1,
+        &vals.tilde_g_r_2.1,
     );
+
+    println!("{:?}", i);
+    // println!(
+    //     "FFT encoding: {:?}",
+    //     original_grid
+    //         .variant
+    //         .encode_fft(&original_grid.grid)
+    //         .unwrap()
+    //         .z
+    // );
 }
