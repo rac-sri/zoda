@@ -68,7 +68,7 @@ where
         let z_r = original_grid.dot(&G.to_owned()).dot(&tilde_g_r.1);
 
         let z_r_2 = G.t().dot(&original_grid.to_owned()).t().dot(&tilde_g_r_2.1);
-        println!("z_r_w {:?}", z_r_2);
+
         Ok(TensorVariantEncodingResult {
             z,
             z_r,
@@ -306,8 +306,6 @@ where
         n: usize,
         row_split_start: usize,
         row_split_end: usize,
-        col_split_start: usize,
-        col_split_end: usize,
         z_r: &Matrix<F>,
         z_r_2: &Matrix<F>,
         w: &Matrix<F>,
@@ -315,6 +313,9 @@ where
         g_r: &Matrix<F>,
         g_r_2: &Matrix<F>,
     ) -> Result<(), Error> {
+        if w.nrows() != row_split_end - row_split_start {
+            return Err(Error::LengthMismatch);
+        }
         let alphas = self.rs.alphas_with_generator(2 * n, self.generator);
         let vandermonte_matrix_g = self.rs.vandermonde_matrix(&alphas, n, 2 * n)?; // cache this as an optimisation
 
@@ -323,13 +324,23 @@ where
         // 2. check W.g_r = G.z_r
         // let g_r = g_r.slice(s![row_split_start..row_split_end, ..]);
 
-        if !(w.dot(g_r) == vandermonte_matrix_g.t().dot(&z_r.to_owned())) {
+        if !(w.dot(g_r)
+            == vandermonte_matrix_g
+                .t()
+                .slice(s![row_split_start..row_split_end, ..])
+                .dot(&z_r.to_owned()))
+        {
             return Err(Error::Custom(
                 "Check 1: W.g_r = G.z_r check failed".to_string(),
             ));
         }
 
-        if !(y.dot(g_r_2) == vandermonte_matrix_g.t().dot(&z_r_2.to_owned())) {
+        if !(y.dot(g_r_2)
+            == vandermonte_matrix_g
+                .t()
+                .slice(s![row_split_start..row_split_end, ..])
+                .dot(&z_r_2.to_owned()))
+        {
             return Err(Error::Custom(
                 "Check 2: (Y^T).g'_r' = G'.z_r' check failed".to_string(),
             ));

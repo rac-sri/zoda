@@ -64,37 +64,31 @@ fn main() {
     let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
 
     let row_split_start = 0_usize;
-    let row_split_end = 1_usize;
+    let row_split_end = 2_usize;
     let col_split = 0_usize;
-    let col_split_end = 3_usize;
+    let col_split_end = 2_usize;
     let sample_w = vals
         .z
         .slice(s![row_split_start..row_split_end, ..])
         .to_owned();
 
-    let sample_y = vals.z.slice(s![.., col_split..col_split_end]).to_owned();
+    let sample_y = vals
+        .z
+        .slice(s![.., col_split..col_split_end])
+        .t()
+        .to_owned();
 
     let i = original_grid.variant.sample_vandermonte(
         original_grid.grid.nrows(),
         row_split_start,
         row_split_end,
-        col_split,
-        col_split_end,
         &vals.z_r,
         &vals.z_r_2,
-        &vals.z,
-        &vals.z.t().to_owned(),
+        &sample_w,
+        &sample_y.to_owned(),
         &vals.tilde_g_r.1,
         &vals.tilde_g_r_2.1,
     );
 
     println!("{:?}", i);
-    // println!(
-    //     "FFT encoding: {:?}",
-    //     original_grid
-    //         .variant
-    //         .encode_fft(&original_grid.grid)
-    //         .unwrap()
-    //         .z
-    // );
 }
