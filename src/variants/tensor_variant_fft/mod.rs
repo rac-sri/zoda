@@ -7,7 +7,7 @@ use ark_ff::FftField;
 use ndarray::{Array2 as Matrix, s};
 use spongefish::{BytesToUnitSerialize, DefaultHash, DomainSeparator, UnitToBytes};
 const TENSOR_VARIANT_DOMAIN_SEPARATOR: &str = "ZODA-TENSOR-VARIANT";
-pub struct TensorVariant<F: FftField, C>
+pub struct TensorVariantFft<F: FftField, C>
 where
     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
@@ -18,7 +18,7 @@ where
     pub commitment: C,
 }
 
-impl<F: FftField, C> Variant<Matrix<F>> for TensorVariant<F, C>
+impl<F: FftField, C> Variant<Matrix<F>> for TensorVariantFft<F, C>
 where
     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
@@ -32,7 +32,7 @@ where
     }
 }
 
-impl<F: FftField, C> TensorVariant<F, C>
+impl<F: FftField, C> TensorVariantFft<F, C>
 where
     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
@@ -60,20 +60,36 @@ where
         let z = self.tensor_encode_fft(&original_grid)?;
 
         let mut commitment = self.commitment.clone();
+
         let row_wise_commits = self.row_wise_commit(&z, &mut commitment);
         let col_wise_commits = self.col_wise_commit(&z, &mut commitment);
 
-        if original_grid.nrows() != original_grid.ncols() {
-            return Err(Error::MatrixDimsMismatch);
-        }
+        let tilde_g_r = self.random_vec(z.ncols(), 1)?;
+        let tilde_g_r_2 = self.random_vec(z.nrows(), 1)?;
 
-        let tilde_g_r = self.random_vec(original_grid.nrows(), original_grid.ncols())?;
-        let tilde_g_r_2 = self.random_vec(original_grid.ncols(), original_grid.ncols())?;
+        let encoded_rows: Vec<Vec<F>> = original_grid
+            .rows()
+            .into_iter()
+            .map(|row| self.rs.rs_encode_fft(&row.to_vec()))
+            .collect::<Result<_, _>>()?;
 
-        let n = original_grid.ncols();
-        let z_r = z.slice(s![.., 0..n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
+        let encoded_rows_matrix =
+            create_matrix!(encoded_rows, encoded_rows.len(), encoded_rows[0].len())?;
 
-        let z_r_2 = z.slice(s![0..n, ..]).t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
+        let encoded_cols: Vec<Vec<F>> = original_grid
+            .columns()
+            .into_iter()
+            .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
+            .collect::<Result<_, _>>()?;
+
+        let encoded_cols_matrix =
+            create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?
+                .t()
+                .to_owned();
+
+        let z_r = encoded_rows_matrix.dot(&tilde_g_r.1); // XGgr  ( G = G')
+
+        let z_r_2 = encoded_cols_matrix.t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
 
         Ok(TensorVariantEncodingResult {
             z,
@@ -90,14 +106,6 @@ where
     where
         F: FftField,
     {
-        let n = original_grid.nrows();
-        let mut matrix_tensor = Matrix::<F>::zeros((n * 2, n * 2));
-
-        matrix_tensor
-            .slice_mut(s![0..n, 0..n])
-            .assign(&original_grid);
-
-        // row wise commitment
         let encoded_rows: Vec<Vec<F>> = original_grid
             .rows()
             .into_iter()
@@ -107,12 +115,7 @@ where
         let encoded_rows_matrix =
             create_matrix!(encoded_rows, encoded_rows.len(), encoded_rows[0].len())?;
 
-        matrix_tensor
-            .slice_mut(s!(0..n, n..2 * n))
-            .assign(&encoded_rows_matrix);
-
-        // encode q1 column wise
-        let encoded_cols: Vec<Vec<F>> = original_grid
+        let encoded_cols: Vec<Vec<F>> = encoded_rows_matrix
             .columns()
             .into_iter()
             .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
@@ -121,28 +124,7 @@ where
         let encoded_cols_matrix =
             create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?;
 
-        matrix_tensor
-            .slice_mut(s!(n..2 * n, 0..n))
-            .assign(&encoded_cols_matrix);
-
-        // encode q2 column wise
-        let encoded_q2_cols: Vec<Vec<F>> = encoded_rows_matrix
-            .columns()
-            .into_iter()
-            .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
-            .collect::<Result<_, _>>()?;
-
-        let encoded_q2_cols_matrix = create_matrix!(
-            encoded_q2_cols,
-            encoded_q2_cols.len(),
-            encoded_q2_cols[0].len()
-        )?;
-
-        matrix_tensor
-            .slice_mut(s!(n..2 * n, n..2 * n))
-            .assign(&encoded_q2_cols_matrix);
-
-        Ok(matrix_tensor)
+        Ok(encoded_cols_matrix.t().to_owned())
     }
 
     fn row_wise_commit(
@@ -247,6 +229,64 @@ where
         }
 
         Ok((combined_transcript, random_matrix))
+    }
+
+    pub fn sample_fft(
+        &self,
+        z_r: &Matrix<F>,
+        z_r_2: &Matrix<F>,
+        w: &Matrix<F>,
+        y: &Matrix<F>,
+        g_r: &Matrix<F>,
+        g_r_2: &Matrix<F>,
+    ) -> Result<(), Error> {
+        // Check 6: WSg¯r = GSzr
+        let z_r_columns: Vec<Vec<F>> = z_r.columns().into_iter().map(|col| col.to_vec()).collect();
+        let encoded_z_r_columns: Vec<Vec<F>> = z_r_columns
+            .iter()
+            .map(|col| self.rs.rs_encode_fft(col))
+            .collect::<Result<_, _>>()?;
+        let g_s_z_r = create_matrix!(
+            encoded_z_r_columns,
+            encoded_z_r_columns[0].len(),
+            encoded_z_r_columns.len()
+        )?;
+
+        if !(w.dot(g_r) == g_s_z_r) {
+            return Err(Error::Custom(
+                "Check 6: WSg¯r = GSzr check failed".to_string(),
+            ));
+        }
+
+        // Check 7: (Y^T)S'g¯'r' = G'S'z'r'
+        let z_r_prime_columns: Vec<Vec<F>> = z_r_2
+            .columns()
+            .into_iter()
+            .map(|col| col.to_vec())
+            .collect();
+        let encoded_z_r_prime_columns: Vec<Vec<F>> = z_r_prime_columns
+            .iter()
+            .map(|col| self.rs.rs_encode_fft(col))
+            .collect::<Result<_, _>>()?;
+        let g_prime_s_prime_z_r_prime = create_matrix!(
+            encoded_z_r_prime_columns,
+            encoded_z_r_prime_columns[0].len(),
+            encoded_z_r_prime_columns.len()
+        )?;
+
+        if !(y.dot(g_r_2) == g_prime_s_prime_z_r_prime) {
+            return Err(Error::Custom(
+                "Check 7: (Y^T)S'g¯'r' = G'S'z'r' check failed".to_string(),
+            ));
+        }
+
+        // Check 8: g¯'T r' G zr = g¯T r G' z'r'
+        if !(g_r_2.t().dot(&g_s_z_r) == g_r.t().dot(&g_prime_s_prime_z_r_prime)) {
+            return Err(Error::Custom(
+                "Check 8: g¯'T r' G zr = g¯T r G' z'r' failed".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -51,7 +51,6 @@ where
     ) -> Result<TensorVariantEncodingResult<F>, Error> {
         let (z, G, G_2) = self.tensor_encode_vandermonde(&original_grid)?;
 
-        println!("z {:?}", z);
         let mut commitment_scheme = self.commitment.clone();
         let row_wise_commits = self.row_wise_commit(&z, &mut commitment_scheme);
         let col_wise_commits = self.col_wise_commit(&z, &mut commitment_scheme);
@@ -59,15 +58,8 @@ where
         let tilde_g_r = self.random_vec(z.ncols(), 1)?;
         let tilde_g_r_2 = self.random_vec(z.nrows(), 1)?;
 
-        println!("here");
-
         let z_r = original_grid.dot(&G_2.t().to_owned()).dot(&tilde_g_r.1);
-        // 4x2 . 4x2 = 4x4 . 4x1
-        println!("here");
-
         let z_r_2 = original_grid.t().dot(&G.t()).dot(&tilde_g_r_2.1);
-
-        println!("comming");
 
         Ok(TensorVariantEncodingResult {
             z,
@@ -92,10 +84,6 @@ where
 
         let g = self.rs.vandermonde_matrix(&alphas, n, 2 * n)?; // cache this as an optimisation
         let g_2 = self.rs.vandermonde_matrix(&alphas_2, n_2, 2 * n_2)?;
-
-        println!("n n' {} {}", n, n_2);
-        println!("g {:?}", g);
-        println!("g_2 {:?}", g_2); // cache thi
 
         let row_encoding = self.rs.rs_encode(&g, &original_grid)?;
 

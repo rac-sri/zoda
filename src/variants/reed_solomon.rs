@@ -103,7 +103,7 @@ impl ReedSolomon {
     }
 
     pub fn rs_encode_fft<F: FftField>(&self, points: &Vec<F>) -> Result<Vec<F>, Error> {
-        let domain = GeneralEvaluationDomain::<F>::new(points.len())
+        let domain = GeneralEvaluationDomain::<F>::new(points.len() * 2)
             .ok_or_else(|| Error::Custom("DOMAIN GENERATION ERROR".to_string()))?;
 
         Ok(domain.fft(points))
