@@ -3,7 +3,7 @@ use ark_ff::{FftField, fields::Field};
 use ark_poly::{
     DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain, univariate::DensePolynomial,
 };
-use ndarray::{Array2 as Matrix, s};
+use ndarray::Array2 as Matrix;
 
 #[macro_export]
 macro_rules! create_matrix {
@@ -98,8 +98,8 @@ impl ReedSolomon {
         (1..=n).map(|i| generator.pow([i as u64])).collect()
     }
 
-    pub fn rs_encode<F: Field>(&self, msg: &Matrix<F>, G: &Matrix<F>) -> Result<Matrix<F>, Error> {
-        Ok(msg.dot(G))
+    pub fn rs_encode<F: Field>(&self, msg: &Matrix<F>, g: &Matrix<F>) -> Result<Matrix<F>, Error> {
+        Ok(msg.dot(g))
     }
 
     pub fn rs_encode_fft<F: FftField>(&self, points: &Vec<F>) -> Result<Vec<F>, Error> {
@@ -107,5 +107,12 @@ impl ReedSolomon {
             .ok_or_else(|| Error::Custom("DOMAIN GENERATION ERROR".to_string()))?;
 
         Ok(domain.fft(points))
+    }
+
+    pub fn rs_decode_fft<F: FftField>(&self, points: &Vec<F>) -> Result<Vec<F>, Error> {
+        let domain = GeneralEvaluationDomain::<F>::new(points.len() / 2)
+            .ok_or_else(|| Error::Custom("DOMAIN GENERATION ERROR".to_string()))?;
+
+        Ok(domain.ifft(points))
     }
 }

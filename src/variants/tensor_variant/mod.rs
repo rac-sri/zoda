@@ -346,7 +346,7 @@ mod tests {
         for _ in 0..num_samples {
             // Pick random start index for a 2-row block
             let row_split_start = rng.gen_range(0..=(n - 2));
-            let row_split_end = row_split_start + 2;
+            let row_split_end = row_split_start + 4;
 
             // Pick random start index for a 2-column block
             let col_split_start = rng.gen_range(0..=(m - 2));

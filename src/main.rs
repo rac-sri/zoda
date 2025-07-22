@@ -6,7 +6,7 @@ mod variants;
 use ark_bls12_381::Fr as Fq;
 
 use ark_crypto_primitives::crh::{CRHScheme, TwoToOneCRHScheme};
-use ark_ff::{BigInt, FftField};
+use ark_ff::BigInt;
 use ark_serialize::CanonicalSerialize;
 use ndarray::{arr2, s};
 use rand::{Rng, thread_rng};
@@ -17,8 +17,30 @@ use crate::{
 };
 fn main() {
     let matrix = arr2(&[
-        [Fq::new(BigInt::from(11_u8)), Fq::new(BigInt::from(32_u8))],
-        [Fq::new(BigInt::from(1_u8)), Fq::new(BigInt::from(4_u8))],
+        [
+            Fq::new(BigInt::from(11_u8)),
+            Fq::new(BigInt::from(32_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(4_u8)),
+        ],
+        [
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(4_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(4_u8)),
+        ],
+        [
+            Fq::new(BigInt::from(11_u8)),
+            Fq::new(BigInt::from(32_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(4_u8)),
+        ],
+        [
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(4_u8)),
+            Fq::new(BigInt::from(1_u8)),
+            Fq::new(BigInt::from(4_u8)),
+        ],
     ]);
 
     let mut leaves: Vec<Vec<u8>> = Vec::new();
@@ -34,7 +56,7 @@ fn main() {
     let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
     let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-    let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(Fq::GENERATOR, ac_commit);
+    let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
 
     let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
     let i = original_grid.encode().unwrap();
@@ -51,12 +73,12 @@ fn main() {
 
     for _ in 0..num_samples {
         // Pick random start index for a 2-row block
-        let row_split_start = 0;
-        let row_split_end = 2 * n;
+        let row_split_start = rng.gen_range(0..=n - 2);
+        let row_split_end = row_split_start + 2;
 
         // Pick random start index for a 2-column block
-        let col_split_start = 0;
-        let col_split_end = 2 * m;
+        let col_split_start = rng.gen_range(0..=m - 1);
+        let col_split_end = col_split_start + 1;
 
         // Extract 2xAll columns row block
         let sample_w = vals
@@ -72,6 +94,10 @@ fn main() {
             .to_owned();
 
         let result = original_grid.variant.sample_fft(
+            row_split_start,
+            row_split_end,
+            col_split_start,
+            col_split_end,
             &vals.z_r,
             &vals.z_r_2,
             &sample_w,
