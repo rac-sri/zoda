@@ -1,9 +1,6 @@
 use crate::variants::Variant;
-use crate::{
-    commitments::ACCommitmentScheme, create_matrix, error::Error,
-    variants::reed_solomon::ReedSolomon,
-};
-use ark_ff::{FftField, Field};
+use crate::{commitments::ACCommitmentScheme, error::Error, variants::reed_solomon::ReedSolomon};
+use ark_ff::Field;
 use ndarray::{Array2 as Matrix, s};
 use spongefish::{BytesToUnitSerialize, DefaultHash, DomainSeparator, UnitToBytes};
 const TENSOR_VARIANT_DOMAIN_SEPARATOR: &str = "ZODA-TENSOR-VARIANT";
@@ -52,22 +49,25 @@ where
         &mut self,
         original_grid: &Matrix<F>,
     ) -> Result<TensorVariantEncodingResult<F>, Error> {
-        let (z, G) = self.tensor_encode_vandermonde(&original_grid)?;
+        let (z, G, G_2) = self.tensor_encode_vandermonde(&original_grid)?;
 
+        println!("z {:?}", z);
         let mut commitment_scheme = self.commitment.clone();
         let row_wise_commits = self.row_wise_commit(&z, &mut commitment_scheme);
         let col_wise_commits = self.col_wise_commit(&z, &mut commitment_scheme);
 
-        if original_grid.nrows() != original_grid.ncols() {
-            return Err(Error::MatrixDimsMismatch);
-        }
-
-        let tilde_g_r = self.random_vec(z.nrows(), 1)?;
+        let tilde_g_r = self.random_vec(z.ncols(), 1)?;
         let tilde_g_r_2 = self.random_vec(z.nrows(), 1)?;
 
-        let z_r = original_grid.dot(&G.to_owned()).dot(&tilde_g_r.1);
+        println!("here");
 
-        let z_r_2 = G.t().dot(&original_grid.to_owned()).t().dot(&tilde_g_r_2.1);
+        let z_r = original_grid.dot(&G_2.t().to_owned()).dot(&tilde_g_r.1);
+        // 4x2 . 4x2 = 4x4 . 4x1
+        println!("here");
+
+        let z_r_2 = original_grid.t().dot(&G.t()).dot(&tilde_g_r_2.1);
+
+        println!("comming");
 
         Ok(TensorVariantEncodingResult {
             z,
@@ -80,122 +80,29 @@ where
         })
     }
 
-    // #[allow(non_snake_case)]
-    // pub fn encode_fft(
-    //     &self,
-    //     original_grid: &Matrix<F>,
-    // ) -> Result<TensorVariantEncodingResult<F>, Error>
-    // where
-    //     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>>,
-    //     C::Commitment: std::convert::Into<Vec<u8>>,
-    //     F: FftField,
-    // {
-    //     let z = self.tensor_encode_fft(&original_grid)?;
-
-    //     let mut commitment = self.commitment.clone();
-    //     let row_wise_commits = self.row_wise_commit(&z, &mut commitment);
-    //     let col_wise_commits = self.col_wise_commit(&z, &mut commitment);
-
-    //     if original_grid.nrows() != original_grid.ncols() {
-    //         return Err(Error::MatrixDimsMismatch);
-    //     }
-
-    //     let tilde_g_r = self.random_vec(original_grid.nrows(), original_grid.ncols())?;
-    //     let tilde_g_r_2 = self.random_vec(original_grid.ncols(), original_grid.ncols())?;
-
-    //     let n = original_grid.ncols();
-    //     let z_r = z.slice(s![.., 0..n]).dot(&tilde_g_r.1); // XGgr  ( G = G')
-
-    //     let z_r_2 = z.slice(s![0..n, ..]).t().dot(&tilde_g_r_2.1); // X^T.G^T.g' = (GX)^T.g'
-
-    //     Ok(TensorVariantEncodingResult {
-    //         z,
-    //         z_r,
-    //         z_r_2,
-    //         tilde_g_r,
-    //         tilde_g_r_2,
-    //         row_wise_commits,
-    //         col_wise_commits,
-    //     })
-    // }
-
     fn tensor_encode_vandermonde(
         &self,
         original_grid: &Matrix<F>,
-    ) -> Result<(Matrix<F>, Matrix<F>), Error> {
+    ) -> Result<(Matrix<F>, Matrix<F>, Matrix<F>), Error> {
         let n = original_grid.nrows();
+        let n_2 = original_grid.ncols();
 
         let alphas = self.rs.alphas_with_generator(2 * n, self.generator);
+        let alphas_2 = self.rs.alphas_with_generator(2 * n_2, self.generator);
 
         let g = self.rs.vandermonde_matrix(&alphas, n, 2 * n)?; // cache this as an optimisation
+        let g_2 = self.rs.vandermonde_matrix(&alphas_2, n_2, 2 * n_2)?;
 
-        let tilde_g = g.t().to_owned();
+        println!("n n' {} {}", n, n_2);
+        println!("g {:?}", g);
+        println!("g_2 {:?}", g_2); // cache thi
 
-        let row_encoding = self.rs.rs_encode(&original_grid, &g)?;
+        let row_encoding = self.rs.rs_encode(&g, &original_grid)?;
 
-        let col_encoding = self.rs.rs_encode(&tilde_g, &row_encoding)?;
+        let col_encoding = self.rs.rs_encode(&row_encoding, &g_2.t().to_owned())?;
 
-        Ok((col_encoding, g))
+        Ok((col_encoding, g, g_2))
     }
-
-    // fn tensor_encode_fft(&self, original_grid: &Matrix<F>) -> Result<Matrix<F>, Error>
-    // where
-    //     F: FftField,
-    // {
-    //     let n = original_grid.nrows();
-    //     let mut matrix_tensor = Matrix::<F>::zeros((n * 2, n * 2));
-
-    //     matrix_tensor
-    //         .slice_mut(s![0..n, 0..n])
-    //         .assign(&original_grid);
-
-    //     // row wise commitment
-    //     let encoded_rows: Vec<Vec<F>> = original_grid
-    //         .rows()
-    //         .into_iter()
-    //         .map(|row| self.rs.rs_encode_fft(&row.to_vec()))
-    //         .collect::<Result<_, _>>()?;
-
-    //     let encoded_rows_matrix =
-    //         create_matrix!(encoded_rows, encoded_rows.len(), encoded_rows[0].len())?;
-
-    //     matrix_tensor
-    //         .slice_mut(s!(0..n, n..2 * n))
-    //         .assign(&encoded_rows_matrix);
-
-    //     // encode q1 column wise
-    //     let encoded_cols: Vec<Vec<F>> = original_grid
-    //         .columns()
-    //         .into_iter()
-    //         .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
-    //         .collect::<Result<_, _>>()?;
-
-    //     let encoded_cols_matrix =
-    //         create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?;
-
-    //     matrix_tensor
-    //         .slice_mut(s!(n..2 * n, 0..n))
-    //         .assign(&encoded_cols_matrix);
-
-    //     // encode q2 column wise
-    //     let encoded_q2_cols: Vec<Vec<F>> = encoded_rows_matrix
-    //         .columns()
-    //         .into_iter()
-    //         .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
-    //         .collect::<Result<_, _>>()?;
-
-    //     let encoded_q2_cols_matrix = create_matrix!(
-    //         encoded_q2_cols,
-    //         encoded_q2_cols.len(),
-    //         encoded_q2_cols[0].len()
-    //     )?;
-
-    //     matrix_tensor
-    //         .slice_mut(s!(n..2 * n, n..2 * n))
-    //         .assign(&encoded_q2_cols_matrix);
-
-    //     Ok(matrix_tensor)
-    // }
 
     fn row_wise_commit(
         &self,
@@ -304,6 +211,7 @@ where
     pub fn sample_vandermonte(
         &self,
         n: usize,
+        n_2: usize,
         row_split_start: usize,
         row_split_end: usize,
         col_split_start: usize,
@@ -320,8 +228,20 @@ where
         {
             return Err(Error::LengthMismatch);
         }
+
         let alphas = self.rs.alphas_with_generator(2 * n, self.generator);
-        let vandermonte_matrix_g = self.rs.vandermonde_matrix(&alphas, n, 2 * n)?; // cache this as an optimisation
+        let alphas_2 = self.rs.alphas_with_generator(2 * n_2, self.generator);
+
+        let g = self
+            .rs
+            .vandermonde_matrix(&alphas, n, 2 * n)?
+            .t()
+            .to_owned(); // cache this as an optimisation
+        let g_2 = self
+            .rs
+            .vandermonde_matrix(&alphas_2, n_2, 2 * n_2)?
+            .t()
+            .to_owned();
 
         // 1. match and verify the commitments
 
@@ -329,8 +249,7 @@ where
         // let g_r = g_r.slice(s![row_split_start..row_split_end, ..]);
 
         if !(w.dot(g_r)
-            == vandermonte_matrix_g
-                .t()
+            == g.t()
                 .slice(s![row_split_start..row_split_end, ..])
                 .dot(&z_r.to_owned()))
         {
@@ -340,7 +259,7 @@ where
         }
 
         if !(y.dot(g_r_2)
-            == vandermonte_matrix_g
+            == g_2
                 .t()
                 .slice(s![col_split_start..col_split_end, ..])
                 .dot(&z_r_2.to_owned()))
@@ -350,14 +269,8 @@ where
             ));
         }
 
-        if !(g_r_2
-            .t()
-            .dot(&vandermonte_matrix_g.t())
-            .dot(&z_r.to_owned())
-            == g_r
-                .t()
-                .dot(&vandermonte_matrix_g.t())
-                .dot(&z_r_2.to_owned()))
+        if !(g_r_2.t().dot(&g.t()).dot(&z_r.to_owned())
+            == g_r.t().dot(&g_2.t()).dot(&z_r_2.to_owned()))
         {
             return Err(Error::Custom(
                 "Check 3: g'^T_r'.G.z_r = g_r^T.G'.z'_r' failed".to_string(),
@@ -383,51 +296,39 @@ mod tests {
     use super::*;
     use crate::{
         commitments::merkle_commitment::{ACMerkleTree, LeafHash, TwoToOneHash},
+        create_matrix,
         grid::DataGrid,
         variants,
     };
     use ark_crypto_primitives::crh::{CRHScheme, TwoToOneCRHScheme};
-    use ark_ff::BigInt;
+    use ark_ff::{BigInt, FftField};
     use ark_serialize::CanonicalSerialize;
-    use ndarray::{arr2, s};
+    use ndarray::s;
     use rand::{Rng, thread_rng};
 
     use ark_bls12_381::Fr as Fq;
 
-    fn generate_mock_grid() -> Matrix<Fq> {
-        let matrix = arr2(&[
-            [
-                Fq::new(BigInt::from(11_u8)),
-                Fq::new(BigInt::from(32_u8)),
-                Fq::new(BigInt::from(3_u8)),
-                Fq::new(BigInt::from(13_u8)),
-            ],
-            [
-                Fq::new(BigInt::from(1_u8)),
-                Fq::new(BigInt::from(4_u8)),
-                Fq::new(BigInt::from(1_u8)),
-                Fq::new(BigInt::from(3_u8)),
-            ],
-            [
-                Fq::new(BigInt::from(1_u8)),
-                Fq::new(BigInt::from(3_u8)),
-                Fq::new(BigInt::from(1_u8)),
-                Fq::new(BigInt::from(3_u8)),
-            ],
-            [
-                Fq::new(BigInt::from(1_u8)),
-                Fq::new(BigInt::from(4_u8)),
-                Fq::new(BigInt::from(1_u8)),
-                Fq::new(BigInt::from(3_u8)),
-            ],
-        ]);
+    fn generate_mock_grid(rows: usize, cols: usize) -> Matrix<Fq> {
+        let mut rng = thread_rng();
+        let mut data: Vec<Vec<Fq>> = Vec::with_capacity(rows);
 
-        matrix
+        for _ in 0..rows {
+            let mut row_vec: Vec<Fq> = Vec::with_capacity(cols);
+            for _ in 0..cols {
+                let val = rng.gen_range(0..256); // or choose a suitable range for Fq
+                row_vec.push(Fq::new(BigInt::from(val as u32)));
+            }
+            data.push(row_vec);
+        }
+
+        let matrix = create_matrix!(data, rows, cols);
+        matrix.unwrap()
     }
-
     #[test]
-    fn test_tensor_variant_encoding_result() {
-        let matrix = generate_mock_grid();
+    fn test_tensor_variant_square_encoding_result() {
+        let n: usize = 4; // Number of rows
+        let m: usize = 4; // Number of columns
+        let matrix = generate_mock_grid(n, m);
         let mut leaves: Vec<Vec<u8>> = Vec::new();
         for _ in 0..4 {
             let fq = Fq::new(BigInt::from(1_u8));
@@ -448,23 +349,28 @@ mod tests {
 
         let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
 
-        let n = original_grid.grid.nrows(); // assuming square matrix
-        let num_samples = 20; // how many random samples you want
+        let num_samples = 20; // Number of random samples
+
+        assert!(n >= 2 && m >= 2, "Matrix must be at least 2x2 for sampling");
 
         let mut rng = rand::thread_rng();
 
         for _ in 0..num_samples {
-            // Pick random start indices for rows and columns
-            let row_split_start = rng.gen_range(0..(n - 1));
+            // Pick random start index for a 2-row block
+            let row_split_start = rng.gen_range(0..=(n - 2));
             let row_split_end = row_split_start + 2;
-            let col_split_start = rng.gen_range(0..(n - 1));
+
+            // Pick random start index for a 2-column block
+            let col_split_start = rng.gen_range(0..=(m - 2));
             let col_split_end = col_split_start + 2;
 
+            // Extract 2xAll columns row block
             let sample_w = vals
                 .z
                 .slice(s![row_split_start..row_split_end, ..])
                 .to_owned();
 
+            // Extract All rows x 2 columns column block, then transpose if needed
             let sample_y = vals
                 .z
                 .slice(s![.., col_split_start..col_split_end])
@@ -473,6 +379,7 @@ mod tests {
 
             let result = original_grid.variant.sample_vandermonte(
                 n,
+                m,
                 row_split_start,
                 row_split_end,
                 col_split_start,
@@ -490,8 +397,10 @@ mod tests {
     }
 
     #[test]
-    fn test_tensor_variant_sampling_failure_on_incorrect_data() {
-        let matrix = generate_mock_grid();
+    fn test_tensor_variant_row_rec_encoding_result() {
+        let n: usize = 8; // Number of rows
+        let m: usize = 4; // Number of columns
+        let matrix = generate_mock_grid(n, m);
         let mut leaves: Vec<Vec<u8>> = Vec::new();
         for _ in 0..4 {
             let fq = Fq::new(BigInt::from(1_u8));
@@ -510,30 +419,181 @@ mod tests {
         let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
         original_grid.encode().unwrap();
 
-        // Mutate the encoded data
-        let vals = original_grid.variant.tensor_cache.as_mut().unwrap();
-        vals.z[[0, 0]] += Fq::from(1u64); // Corrupt the first element
+        let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
 
-        // Copy the data you need
-        let z = vals.z.clone();
-        let z_r = vals.z_r.clone();
-        let z_r_2 = vals.z_r_2.clone();
-        let tilde_g_r = vals.tilde_g_r.1.clone();
-        let tilde_g_r_2 = vals.tilde_g_r_2.1.clone();
+        let num_samples = 20; // Number of random samples
 
-        // Now the mutable borrow is dropped, you can call methods on original_grid.variant
-        let n = original_grid.grid.nrows();
-        let num_samples = 100;
+        assert!(n >= 2 && m >= 2, "Matrix must be at least 2x2 for sampling");
+
         let mut rng = rand::thread_rng();
-        let mut any_failed = false;
 
         for _ in 0..num_samples {
-            let row_split_start = rng.gen_range(0..(n - 1));
+            // Pick random start index for a 2-row block
+            let row_split_start = rng.gen_range(0..=(n - 2));
             let row_split_end = row_split_start + 2;
-            let col_split_start = rng.gen_range(0..(n - 1));
+
+            // Pick random start index for a 2-column block
+            let col_split_start = rng.gen_range(0..=(m - 2));
+            let col_split_end = col_split_start + 2;
+
+            // Extract 2xAll columns row block
+            let sample_w = vals
+                .z
+                .slice(s![row_split_start..row_split_end, ..])
+                .to_owned();
+
+            // Extract All rows x 2 columns column block, then transpose if needed
+            let sample_y = vals
+                .z
+                .slice(s![.., col_split_start..col_split_end])
+                .t()
+                .to_owned();
+
+            let result = original_grid.variant.sample_vandermonte(
+                n,
+                m,
+                row_split_start,
+                row_split_end,
+                col_split_start,
+                col_split_end,
+                &vals.z_r,
+                &vals.z_r_2,
+                &sample_w,
+                &sample_y,
+                &vals.tilde_g_r.1,
+                &vals.tilde_g_r_2.1,
+            );
+
+            assert!(result.is_ok(), "Random sample failed: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_tensor_variant_column_rec_encoding_result() {
+        let n: usize = 4; // Number of rows
+        let m: usize = 8; // Number of columns
+        let matrix = generate_mock_grid(n, m);
+        let mut leaves: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..4 {
+            let fq = Fq::new(BigInt::from(1_u8));
+            let mut buf = Vec::new();
+            fq.serialize_uncompressed(&mut buf).unwrap();
+            leaves.push(buf);
+        }
+
+        let mut rng = thread_rng();
+        let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
+        let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
+
+        let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
+        let tensor_obj = variants::tensor_variant::TensorVariant::new(Fq::GENERATOR, ac_commit);
+
+        let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
+        original_grid.encode().unwrap();
+
+        let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
+
+        let num_samples = 20; // Number of random samples
+
+        assert!(n >= 2 && m >= 2, "Matrix must be at least 2x2 for sampling");
+
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..num_samples {
+            // Pick random start index for a 2-row block
+            let row_split_start = rng.gen_range(0..=(n - 2));
+            let row_split_end = row_split_start + 2;
+
+            // Pick random start index for a 2-column block
+            let col_split_start = rng.gen_range(0..=(m - 2));
+            let col_split_end = col_split_start + 2;
+
+            // Extract 2xAll columns row block
+            let sample_w = vals
+                .z
+                .slice(s![row_split_start..row_split_end, ..])
+                .to_owned();
+
+            // Extract All rows x 2 columns column block, then transpose if needed
+            let sample_y = vals
+                .z
+                .slice(s![.., col_split_start..col_split_end])
+                .t()
+                .to_owned();
+
+            let result = original_grid.variant.sample_vandermonte(
+                n,
+                m,
+                row_split_start,
+                row_split_end,
+                col_split_start,
+                col_split_end,
+                &vals.z_r,
+                &vals.z_r_2,
+                &sample_w,
+                &sample_y,
+                &vals.tilde_g_r.1,
+                &vals.tilde_g_r_2.1,
+            );
+
+            assert!(result.is_ok(), "Random sample failed: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_tensor_variant_sampling_failure_on_incorrect_data() {
+        let n: usize = 4; // Number of rows
+        let m: usize = 4; // Number of columns
+        let matrix = generate_mock_grid(4, 4);
+        let mut leaves: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..4 {
+            let fq = Fq::new(BigInt::from(1_u8));
+            let mut buf = Vec::new();
+            fq.serialize_uncompressed(&mut buf).unwrap();
+            leaves.push(buf);
+        }
+
+        let mut rng = thread_rng();
+        let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
+        let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
+
+        let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
+        let tensor_obj = variants::tensor_variant::TensorVariant::new(Fq::GENERATOR, ac_commit);
+
+        let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
+        original_grid.encode().unwrap();
+
+        let (z, z_r, z_r_2, tilde_g_r, tilde_g_r_2); // Declare before the scope
+
+        {
+            let vals = original_grid.variant.tensor_cache.as_mut().unwrap();
+            vals.z[[0, 0]] += Fq::from(1u64); // Corrupt
+
+            z = vals.z.clone();
+            z_r = vals.z_r.clone();
+            z_r_2 = vals.z_r_2.clone();
+            tilde_g_r = vals.tilde_g_r.1.clone();
+            tilde_g_r_2 = vals.tilde_g_r_2.1.clone();
+        }
+
+        let num_samples = 20; // Number of random samples
+        let mut any_failed = false;
+
+        assert!(n >= 2 && m >= 2, "Matrix must be at least 2x2 for sampling");
+
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..num_samples {
+            // Pick random start index for a 2-row block
+            let row_split_start = rng.gen_range(0..=(n - 2));
+            let row_split_end = row_split_start + 2;
+
+            // Pick random start index for a 2-column block
+            let col_split_start = rng.gen_range(0..=(m - 2));
             let col_split_end = col_split_start + 2;
 
             let sample_w = z.slice(s![row_split_start..row_split_end, ..]).to_owned();
+
             let sample_y = z
                 .slice(s![.., col_split_start..col_split_end])
                 .t()
@@ -541,6 +601,7 @@ mod tests {
 
             let result = original_grid.variant.sample_vandermonte(
                 n,
+                m,
                 row_split_start,
                 row_split_end,
                 col_split_start,

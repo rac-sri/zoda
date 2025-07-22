@@ -52,7 +52,7 @@ impl ReedSolomon {
         let v_sys_inv = self.invert_vandermonde_matrix(&sys_alphas)?;
 
         // The systematic generator matrix G = V_sys_inv * V.
-        Ok(v_sys_inv.dot(&vandermonde_matrix))
+        Ok(v_sys_inv.dot(&vandermonde_matrix).t().to_owned())
     }
 
     pub fn invert_vandermonde_matrix<F: Field>(&self, alphas: &Vec<F>) -> Result<Matrix<F>, Error> {

@@ -17,30 +17,10 @@ use crate::{
 };
 fn main() {
     let matrix = arr2(&[
-        [
-            Fq::new(BigInt::from(11_u8)),
-            Fq::new(BigInt::from(32_u8)),
-            Fq::new(BigInt::from(3_u8)),
-            Fq::new(BigInt::from(13_u8)),
-        ],
-        [
-            Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(4_u8)),
-            Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(3_u8)),
-        ],
-        [
-            Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(3_u8)),
-            Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(3_u8)),
-        ],
-        [
-            Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(4_u8)),
-            Fq::new(BigInt::from(1_u8)),
-            Fq::new(BigInt::from(3_u8)),
-        ],
+        [Fq::new(BigInt::from(11_u8)), Fq::new(BigInt::from(32_u8))],
+        [Fq::new(BigInt::from(1_u8)), Fq::new(BigInt::from(4_u8))],
+        [Fq::new(BigInt::from(1_u8)), Fq::new(BigInt::from(3_u8))],
+        [Fq::new(BigInt::from(1_u8)), Fq::new(BigInt::from(4_u8))],
     ]);
 
     let mut leaves: Vec<Vec<u8>> = Vec::new();
@@ -63,23 +43,30 @@ fn main() {
 
     let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
 
-    let n = original_grid.grid.nrows(); // assuming square matrix
-    let num_samples = 20; // how many random samples you want
+    let n: usize = original_grid.grid.nrows(); // Number of rows
+    let m: usize = original_grid.grid.ncols(); // Number of columns
+    let num_samples = 20; // Number of random samples
+
+    assert!(n >= 2 && m >= 2, "Matrix must be at least 2x2 for sampling");
 
     let mut rng = rand::thread_rng();
 
     for _ in 0..num_samples {
-        // Pick random start indices for rows and columns
-        let row_split_start = rng.gen_range(0..(n - 1));
+        // Pick random start index for a 2-row block
+        let row_split_start = rng.gen_range(0..=(n - 2));
         let row_split_end = row_split_start + 2;
-        let col_split_start = rng.gen_range(0..(n - 1));
+
+        // Pick random start index for a 2-column block
+        let col_split_start = rng.gen_range(0..=(m - 2));
         let col_split_end = col_split_start + 2;
 
+        // Extract 2xAll columns row block
         let sample_w = vals
             .z
             .slice(s![row_split_start..row_split_end, ..])
             .to_owned();
 
+        // Extract All rows x 2 columns column block, then transpose if needed
         let sample_y = vals
             .z
             .slice(s![.., col_split_start..col_split_end])
@@ -88,6 +75,7 @@ fn main() {
 
         let result = original_grid.variant.sample_vandermonte(
             n,
+            m,
             row_split_start,
             row_split_end,
             col_split_start,

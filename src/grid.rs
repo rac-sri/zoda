@@ -14,10 +14,6 @@ where
     V: Variant<Matrix<F>>,
 {
     pub fn new(grid: Matrix<F>, variant: V) -> Result<Self, Error> {
-        if grid.nrows() != grid.ncols() {
-            return Err(Error::LengthMismatch);
-        }
-
         Ok(Self { grid, variant })
     }
 
