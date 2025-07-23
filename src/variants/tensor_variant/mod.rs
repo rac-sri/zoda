@@ -62,14 +62,56 @@ where
         original_grid: &Matrix<F>,
     ) -> Result<TensorVariantEncodingResult<F>, Error> {
         let row_encoding = self.rs.rs_encode(&self.g, &original_grid)?;
-        let z = self.rs.rs_encode(&row_encoding, &self.g_2.t().to_owned())?;
+
+        let col_encoding = self
+            .rs
+            .rs_encode(&original_grid, &self.g_2.t().to_owned())?;
+
+        let q4 = self.rs.rs_encode(
+            &row_encoding
+                .slice(s![original_grid.nrows()..2 * original_grid.nrows(), ..])
+                .to_owned(),
+            &self
+                .g_2
+                .t()
+                .slice(s![.., original_grid.ncols()..2 * original_grid.ncols()])
+                .to_owned()
+                .to_owned(),
+        );
+
+        let z = {
+            let mut full_matrix =
+                Matrix::<F>::zeros((2 * original_grid.nrows(), 2 * original_grid.ncols()));
+
+            // q1: top-left (from row_encoding or col_encoding)
+            full_matrix
+                .slice_mut(s![..original_grid.nrows(), ..original_grid.ncols()])
+                .assign(original_grid);
+
+            // q2: top-right (from col_encoding)
+            full_matrix
+                .slice_mut(s![..original_grid.nrows(), original_grid.ncols()..])
+                .assign(&col_encoding.slice(s![..original_grid.nrows(), original_grid.ncols()..]));
+
+            // q3: bottom-left (from row_encoding)
+            full_matrix
+                .slice_mut(s![original_grid.nrows().., ..original_grid.ncols()])
+                .assign(&row_encoding.slice(s![original_grid.nrows().., ..original_grid.ncols()]));
+
+            // q4: bottom-right (from q4 calculation)
+            full_matrix
+                .slice_mut(s![original_grid.nrows().., original_grid.ncols()..])
+                .assign(&q4?);
+
+            full_matrix
+        };
 
         let mut commitment_scheme = self.commitment.clone();
         let row_wise_commits = self.row_wise_commit(&z, &mut commitment_scheme);
         let col_wise_commits = self.col_wise_commit(&z, &mut commitment_scheme);
 
-        let z_r = original_grid.dot(&self.g_2.t().to_owned()).dot(&self.g_r);
-        let z_r_2 = original_grid.t().dot(&self.g.t()).dot(&self.g_r_2);
+        let z_r = col_encoding.dot(&self.g_r);
+        let z_r_2 = row_encoding.t().dot(&self.g_r_2);
 
         Ok(TensorVariantEncodingResult {
             z,
@@ -205,11 +247,6 @@ where
 
         // 2. check W.g_r = G.z_r
         // let g_r = g_r.slice(s![row_split_start..row_split_end, ..]);
-
-        println!("w: {:?}", w);
-        println!("g_r: {:?}", self.g_r);
-        println!("g: {:?}", self.g);
-        println!("z_r: {:?}", z_r);
 
         if !(w.dot(&self.g_r)
             == self
