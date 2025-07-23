@@ -17,14 +17,14 @@ where
     pub commitment: C,
 }
 
-impl<F: FftField, C> Variant<Matrix<F>> for TensorVariantFft<F, C>
+impl<F: FftField, C> Variant<Matrix<F>, TensorVariantEncodingResult<F>> for TensorVariantFft<F, C>
 where
     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
-    fn encode(&mut self, grid: &Matrix<F>) -> Result<Matrix<F>, Error> where {
+    fn encode(&mut self, grid: &Matrix<F>) -> Result<TensorVariantEncodingResult<F>, Error> {
         self.tensor_cache = Some(self.encode_fft(grid)?);
-        Ok(self.tensor_cache.as_ref().unwrap().z.clone())
+        Ok(self.tensor_cache.clone().unwrap())
     }
     fn decode(&mut self, original: &Matrix<F>, shards: &Matrix<F>) -> Result<Matrix<F>, Error> {
         !unimplemented!()
@@ -628,8 +628,8 @@ mod tests {
         let encoded_result = original_grid.encode().unwrap();
 
         // Basic checks
-        assert!(encoded_result.nrows() > 0);
-        assert!(encoded_result.ncols() > 0);
+        assert!(encoded_result.z.nrows() > 0);
+        assert!(encoded_result.z.ncols() > 0);
         assert!(original_grid.variant.tensor_cache.is_some());
 
         let cache = original_grid.variant.tensor_cache.as_ref().unwrap();
