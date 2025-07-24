@@ -4,9 +4,13 @@ use ark_ff::Field;
 use ndarray::{Array2 as Matrix, s};
 use spongefish::{BytesToUnitSerialize, DefaultHash, DomainSeparator, UnitToBytes};
 const TENSOR_VARIANT_DOMAIN_SEPARATOR: &str = "ZODA-TENSOR-VARIANT";
+
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 pub struct TensorVariant<F: Field, C>
 where
-    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
+    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Send + Sync + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
     pub rs: ReedSolomon,
@@ -19,7 +23,7 @@ where
 
 impl<F: Field, C> Variant<Matrix<F>, TensorVariantEncodingResult<F>> for TensorVariant<F, C>
 where
-    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
+    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Send + Sync + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
     fn encode(&mut self, grid: &Matrix<F>) -> Result<TensorVariantEncodingResult<F>, Error> {
@@ -32,7 +36,7 @@ where
 
 impl<F: Field, C> TensorVariant<F, C>
 where
-    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
+    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Send + Sync + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
     pub fn new(generator: F, commitment: C, n: usize, n_2: usize) -> Result<Self, Error> {
@@ -137,6 +141,25 @@ where
             .map(|row| row.to_vec())
             .collect();
 
+        #[cfg(feature = "parallel")]
+        let commitment_vec = {
+            rows_vec
+                .par_iter()
+                .map(|item| {
+                    let mut commitment_scheme = commitment_scheme.clone();
+                    let mut serialised_list = Vec::<Vec<u8>>::new();
+                    for e in item {
+                        let mut writer = Vec::new();
+                        e.serialize_uncompressed(&mut writer).unwrap();
+                        serialised_list.push(writer);
+                    }
+
+                    commitment_scheme.commit(&serialised_list).unwrap().into()
+                })
+                .collect()
+        };
+
+        #[cfg(not(feature = "parallel"))]
         let commitment_vec = rows_vec
             .iter()
             .map(|item| {
@@ -169,6 +192,25 @@ where
             .map(|col| col.to_vec())
             .collect();
 
+        #[cfg(feature = "parallel")]
+        let commitment_vec = {
+            cols_vec
+                .par_iter()
+                .map(|item| {
+                    let mut commitment_scheme = commitment_scheme.clone();
+                    let mut serialised_list = Vec::<Vec<u8>>::new();
+                    for e in item {
+                        let mut writer = Vec::new();
+                        e.serialize_uncompressed(&mut writer).unwrap();
+                        serialised_list.push(writer);
+                    }
+
+                    commitment_scheme.commit(&serialised_list).unwrap().into()
+                })
+                .collect::<Vec<Vec<u8>>>()
+        };
+
+        #[cfg(not(feature = "parallel"))]
         let commitment_vec = cols_vec
             .iter()
             .map(|item| {

@@ -16,6 +16,13 @@ ark-serialize = {version = "^0.5.0", default-features = false}
 spongefish = { git = "https://github.com/arkworks-rs/spongefish" }
 reed-solomon-simd = {version = "3.0.1", default-features = false}
 rand = { version = "0.8.5" }
+rayon = {version = "^1.10.0" , optional=true}
 
 [features]
-parallel = []
+parallel=["rayon",  "ark-crypto-primitives/parallel",
+    "ark-ff/parallel",
+    "ark-poly/parallel",
+    "ark-ec/parallel",
+    "ark-std/parallel",
+    "ark-serialize/parallel",
+    "ndarray/rayon"]

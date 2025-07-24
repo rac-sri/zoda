@@ -10,6 +10,8 @@ use ark_crypto_primitives::{
 use ark_ed_on_bls12_381::EdwardsProjective as CurveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use rand::thread_rng;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 pub type TwoToOneHash = PedersenTwoToOneCRHCompressor<CurveGroup, TECompressor, TwoToOneWindow>;
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -51,20 +53,28 @@ pub struct ACMerkleTree {
 }
 
 impl ACMerkleTree {
-    pub fn new<L: AsRef<[u8]> + Send>(
+    pub fn new<
+        L: AsRef<<MerkleConfig as ark_crypto_primitives::merkle_tree::Config>::Leaf> + Send,
+    >(
         leaf_hash_param: <LeafHash as CRHScheme>::Parameters,
         two_to_one_hash_param: <TwoToOneHash as TwoToOneCRHScheme>::Parameters,
         #[cfg(not(feature = "parallel"))] leaves: impl IntoIterator<Item = L>,
         #[cfg(feature = "parallel")] leaves: impl IntoParallelIterator<Item = L>,
     ) -> Result<Self, CommitmentError> {
+        let tree =
+            MerkleTree::<MerkleConfig>::new(&leaf_hash_param, &two_to_one_hash_param, leaves)
+                .map_err(|e| CommitmentError::Custom(e.to_string()))?;
+
         Ok(Self {
-            tree: MerkleTree::<MerkleConfig>::new(&leaf_hash_param, &two_to_one_hash_param, leaves)
-                .map_err(|e| CommitmentError::Custom(e.to_string()))?,
+            tree,
             leaf_hash_param,
             two_to_one_hash_param,
         })
     }
-    fn construct_tree<L: AsRef<[u8]> + Send>(
+
+    fn construct_tree<
+        L: AsRef<<MerkleConfig as ark_crypto_primitives::merkle_tree::Config>::Leaf> + Send,
+    >(
         &mut self,
         #[cfg(not(feature = "parallel"))] leaves: impl IntoIterator<Item = L>,
         #[cfg(feature = "parallel")] leaves: impl IntoParallelIterator<Item = L>,
@@ -75,6 +85,7 @@ impl ACMerkleTree {
             leaves,
         )
         .map_err(|e| CommitmentError::Custom(e.to_string()))?;
+
         Ok(tree)
     }
 }
@@ -85,7 +96,12 @@ impl ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> for ACMerkleTree {
     type Opening = Result<bool, CommitmentError>;
 
     fn commit(&mut self, items: &Vec<Vec<u8>>) -> Result<Self::Commitment, CommitmentError> {
+        #[cfg(feature = "parallel")]
+        let tree = self.construct_tree(items.par_iter())?;
+
+        #[cfg(not(feature = "parallel"))]
         let tree = self.construct_tree(items.iter())?;
+
         let mut writer = Vec::new();
         tree.root().serialize_uncompressed(&mut writer).unwrap();
         Ok(writer)

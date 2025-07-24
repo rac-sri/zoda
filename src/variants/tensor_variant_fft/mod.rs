@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::variants::Variant;
 use crate::{
     commitments::ACCommitmentScheme, create_matrix, error::Error,
@@ -6,13 +8,17 @@ use crate::{
 use ark_ff::FftField;
 use ndarray::{Array2 as Matrix, arr1, s};
 use spongefish::{BytesToUnitSerialize, DefaultHash, DomainSeparator, UnitToBytes};
+
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 const TENSOR_VARIANT_DOMAIN_SEPARATOR: &str = "ZODA-TENSOR-VARIANT";
 pub struct TensorVariantFft<F: FftField, C>
 where
-    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
+    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone + Send + Sync,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
-    pub rs: ReedSolomon,
+    pub rs: Arc<ReedSolomon>,
     pub commitment: C,
     pub g_r: Matrix<F>,
     pub g_r_2: Matrix<F>,
@@ -20,7 +26,7 @@ where
 
 impl<F: FftField, C> Variant<Matrix<F>, TensorVariantEncodingResult<F>> for TensorVariantFft<F, C>
 where
-    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
+    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone + Send + Sync,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
     fn encode(&mut self, grid: &Matrix<F>) -> Result<TensorVariantEncodingResult<F>, Error> {
@@ -33,7 +39,7 @@ where
 
 impl<F: FftField, C> TensorVariantFft<F, C>
 where
-    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
+    C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone + Send + Sync,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
     pub fn new(commitment: C, n: usize, n_2: usize) -> Result<Self, Error> {
@@ -52,7 +58,7 @@ where
         let g_r_matrix = arr1(&g_r).insert_axis(ndarray::Axis(1));
         let g_r_2_matrix = arr1(&g_r_2).insert_axis(ndarray::Axis(1));
         Ok(Self {
-            rs,
+            rs: Arc::new(rs),
             commitment,
             g_r: g_r_matrix,
             g_r_2: g_r_2_matrix,
@@ -69,23 +75,46 @@ where
         C::Commitment: std::convert::Into<Vec<u8>>,
         F: FftField,
     {
-        let encoded_rows: Vec<Vec<F>> = original_grid
-            .rows()
-            .into_iter()
-            .map(|row| {
-                let i = self.rs.rs_encode_fft(&row.to_vec())?;
-                Ok(i)
-            })
-            .collect::<Result<_, _>>()?;
+        #[cfg(feature = "parallel")]
+        let rs = self.rs.clone();
+        let encoded_rows: Vec<Vec<F>> = {
+            let rows: Vec<_> = original_grid.rows().into_iter().collect();
+
+            #[cfg(feature = "parallel")]
+            let encoded_rows = rows
+                .par_iter()
+                .map(|row| rs.rs_encode_fft(&row.to_vec()))
+                .collect::<Result<_, _>>()?;
+
+            #[cfg(not(feature = "parallel"))]
+            let encoded_rows = rows
+                .iter()
+                .map(|row| self.rs.rs_encode_fft(&row.to_vec()))
+                .collect::<Result<_, _>>()?;
+
+            encoded_rows
+        };
 
         let encoded_rows_matrix =
             create_matrix!(encoded_rows, encoded_rows.len(), encoded_rows[0].len())?;
 
-        let encoded_cols: Vec<Vec<F>> = encoded_rows_matrix
-            .columns()
-            .into_iter()
-            .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
-            .collect::<Result<_, _>>()?;
+        let encoded_cols: Vec<Vec<F>> = {
+            let cols: Vec<_> = encoded_rows_matrix.columns().into_iter().collect();
+
+            #[cfg(feature = "parallel")]
+            let encoded_cols = cols
+                .par_iter()
+                .map(|col| rs.rs_encode_fft(&col.to_vec()))
+                .collect::<Result<_, _>>()?;
+
+            #[cfg(not(feature = "parallel"))]
+            let encoded_cols = cols
+                .iter()
+                .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
+                .collect::<Result<_, _>>()?;
+
+            encoded_cols
+        };
 
         let encoded_cols_matrix =
             create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?;
@@ -99,11 +128,23 @@ where
 
         let z_r = encoded_rows_matrix.dot(&self.g_r); // XGgr  ( G = G')
 
-        let encoded_cols: Vec<Vec<F>> = original_grid
-            .columns()
-            .into_iter()
-            .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
-            .collect::<Result<_, _>>()?;
+        let encoded_cols: Vec<Vec<F>> = {
+            let cols: Vec<_> = original_grid.columns().into_iter().collect();
+
+            #[cfg(feature = "parallel")]
+            let encoded_cols = cols
+                .par_iter()
+                .map(|col| rs.rs_encode_fft(&col.to_vec()))
+                .collect::<Result<_, _>>()?;
+
+            #[cfg(not(feature = "parallel"))]
+            let encoded_cols = cols
+                .iter()
+                .map(|col| self.rs.rs_encode_fft(&col.to_vec()))
+                .collect::<Result<_, _>>()?;
+
+            encoded_cols
+        };
 
         let encoded_cols_matrix =
             create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?;
@@ -134,6 +175,25 @@ where
             .map(|row| row.to_vec())
             .collect();
 
+        #[cfg(feature = "parallel")]
+        let commitment_vec = {
+            rows_vec
+                .par_iter()
+                .map(|item| {
+                    let mut commitment_scheme = commitment_scheme.clone();
+                    let mut serialised_list = Vec::<Vec<u8>>::new();
+                    for e in item {
+                        let mut writer = Vec::new();
+                        e.serialize_uncompressed(&mut writer).unwrap();
+                        serialised_list.push(writer);
+                    }
+
+                    commitment_scheme.commit(&serialised_list).unwrap().into()
+                })
+                .collect()
+        };
+
+        #[cfg(not(feature = "parallel"))]
         let commitment_vec = rows_vec
             .iter()
             .map(|item| {
@@ -147,7 +207,6 @@ where
                 commitment_scheme.commit(&serialised_list).unwrap().into()
             })
             .collect();
-
         commitment_vec
     }
 
@@ -166,6 +225,25 @@ where
             .map(|col| col.to_vec())
             .collect();
 
+        #[cfg(feature = "parallel")]
+        let commitment_vec = {
+            cols_vec
+                .par_iter()
+                .map(|item| {
+                    let mut commitment_scheme = commitment_scheme.clone();
+                    let mut serialised_list = Vec::<Vec<u8>>::new();
+                    for e in item {
+                        let mut writer = Vec::new();
+                        e.serialize_uncompressed(&mut writer).unwrap();
+                        serialised_list.push(writer);
+                    }
+
+                    commitment_scheme.commit(&serialised_list).unwrap().into()
+                })
+                .collect::<Vec<Vec<u8>>>()
+        };
+
+        #[cfg(not(feature = "parallel"))]
         let commitment_vec = cols_vec
             .iter()
             .map(|item| {
