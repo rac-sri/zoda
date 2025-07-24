@@ -13,8 +13,9 @@ where
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
     pub rs: ReedSolomon,
-    pub tensor_cache: Option<TensorVariantEncodingResult<F>>,
     pub commitment: C,
+    pub g_r: Matrix<F>,
+    pub g_r_2: Matrix<F>,
 }
 
 impl<F: FftField, C> Variant<Matrix<F>, TensorVariantEncodingResult<F>> for TensorVariantFft<F, C>
@@ -23,8 +24,7 @@ where
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
     fn encode(&mut self, grid: &Matrix<F>) -> Result<TensorVariantEncodingResult<F>, Error> {
-        self.tensor_cache = Some(self.encode_fft(grid)?);
-        Ok(self.tensor_cache.clone().unwrap())
+        self.encode_fft(grid)
     }
     fn decode(&mut self, original: &Matrix<F>, shards: &Matrix<F>) -> Result<Matrix<F>, Error> {
         !unimplemented!()
@@ -36,13 +36,27 @@ where
     C: ACCommitmentScheme<Vec<Vec<u8>>, Vec<Vec<u8>>> + Clone,
     C::Commitment: std::convert::Into<Vec<u8>>,
 {
-    pub fn new(commitment: C) -> Self {
-        let rs = ReedSolomon {};
-        Self {
-            rs,
-            tensor_cache: None,
-            commitment,
+    pub fn new(commitment: C, n: usize, n_2: usize) -> Result<Self, Error> {
+        if !n.is_power_of_two() {
+            return Err(Error::Custom(format!("n must be a power of 2, got {}", n)));
         }
+        if !n_2.is_power_of_two() {
+            return Err(Error::Custom(format!(
+                "n_2 must be a power of 2, got {}",
+                n_2
+            )));
+        }
+        let rs = ReedSolomon {};
+        let g_r = Self::random_vec(2 * n_2, 1)?;
+        let g_r_2 = Self::random_vec(2 * n, 1)?;
+        let g_r_matrix = arr1(&g_r).insert_axis(ndarray::Axis(1));
+        let g_r_2_matrix = arr1(&g_r_2).insert_axis(ndarray::Axis(1));
+        Ok(Self {
+            rs,
+            commitment,
+            g_r: g_r_matrix,
+            g_r_2: g_r_2_matrix,
+        })
     }
 
     #[allow(non_snake_case)]
@@ -58,7 +72,10 @@ where
         let encoded_rows: Vec<Vec<F>> = original_grid
             .rows()
             .into_iter()
-            .map(|row| self.rs.rs_encode_fft(&row.to_vec()))
+            .map(|row| {
+                let i = self.rs.rs_encode_fft(&row.to_vec())?;
+                Ok(i)
+            })
             .collect::<Result<_, _>>()?;
 
         let encoded_rows_matrix =
@@ -80,12 +97,7 @@ where
         let row_wise_commits = self.row_wise_commit(&z, &mut commitment);
         let col_wise_commits = self.col_wise_commit(&z, &mut commitment);
 
-        let tilde_g_r = self.random_vec(z.ncols(), 1)?;
-        let tilde_g_r_2 = self.random_vec(z.nrows(), 1)?;
-
-        // Convert Vec<F> to Matrix<F> for matrix operations
-        let tilde_g_r_matrix = arr1(&tilde_g_r).insert_axis(ndarray::Axis(1));
-        let tilde_g_r_2_matrix = arr1(&tilde_g_r_2).insert_axis(ndarray::Axis(1));
+        let z_r = encoded_rows_matrix.dot(&self.g_r); // XGgr  ( G = G')
 
         let encoded_cols: Vec<Vec<F>> = original_grid
             .columns()
@@ -96,15 +108,12 @@ where
         let encoded_cols_matrix =
             create_matrix!(encoded_cols, encoded_cols.len(), encoded_cols[0].len())?;
 
-        let z_r = encoded_rows_matrix.dot(&tilde_g_r_matrix); // XGgr  ( G = G')
-        let z_r_2 = encoded_cols_matrix.dot(&tilde_g_r_2_matrix); // X^T.G^T.g' = (GX)^T.g'
+        let z_r_2 = encoded_cols_matrix.dot(&self.g_r_2); // X^T.G^T.g' = (GX)^T.g'
 
         Ok(TensorVariantEncodingResult {
             z,
             z_r,
             z_r_2,
-            tilde_g_r: (vec![], arr1(&tilde_g_r).insert_axis(ndarray::Axis(1))),
-            tilde_g_r_2: (vec![], arr1(&tilde_g_r_2).insert_axis(ndarray::Axis(1))),
             row_wise_commits,
             col_wise_commits,
         })
@@ -174,7 +183,7 @@ where
         commitment_vec
     }
 
-    fn random_vec(&self, rows: usize, cols: usize) -> Result<Vec<F>, Error> {
+    fn random_vec(rows: usize, cols: usize) -> Result<Vec<F>, Error> {
         let mut random_vec = Vec::<F>::with_capacity(rows * cols);
 
         for _ in 0..(rows * cols) {
@@ -217,10 +226,9 @@ where
         z_r_2: &Matrix<F>,
         w: &Matrix<F>,
         y: &Matrix<F>,
-        g_r: &Matrix<F>,
-        g_r_2: &Matrix<F>,
     ) -> Result<(), Error> {
         // Check 6: WSg¯r = GSzr
+
         let z_r_columns: Vec<Vec<F>> = z_r.columns().into_iter().map(|col| col.to_vec()).collect();
         let encoded_z_r_columns: Vec<Vec<F>> = z_r_columns
             .iter()
@@ -232,7 +240,7 @@ where
             encoded_z_r_columns.len()
         )?;
 
-        if !(w.dot(g_r) == g_s_z_r.slice(s![row_split_start..row_split_end, ..])) {
+        if !(w.dot(&self.g_r) == g_s_z_r.slice(s![row_split_start..row_split_end, ..])) {
             // since we rely on fft, we do encoding against the whole matrix and take slice of the result
             return Err(Error::Custom(
                 "Check 6: WSg¯r = GSzr check failed".to_string(),
@@ -255,7 +263,7 @@ where
             encoded_z_r_prime_columns.len()
         )?;
 
-        if !(y.dot(g_r_2)
+        if !(y.dot(&self.g_r_2)
             == g_prime_s_prime_z_r_prime.slice(s![col_split_start..col_split_end, ..]))
         {
             return Err(Error::Custom(
@@ -263,7 +271,7 @@ where
             ));
         }
 
-        if !(g_r_2.t().dot(&g_s_z_r) == g_r.t().dot(&g_prime_s_prime_z_r_prime)) {
+        if !(self.g_r_2.t().dot(&g_s_z_r) == self.g_r.t().dot(&g_prime_s_prime_z_r_prime)) {
             return Err(Error::Custom(
                 "Check 8: g¯'T r' G zr = g¯T r G' z'r' failed".to_string(),
             ));
@@ -277,8 +285,6 @@ pub struct TensorVariantEncodingResult<F> {
     pub z: Matrix<F>,
     pub z_r: Matrix<F>,
     pub z_r_2: Matrix<F>,
-    pub tilde_g_r: (Vec<u8>, Matrix<F>),
-    pub tilde_g_r_2: (Vec<u8>, Matrix<F>),
     pub row_wise_commits: Vec<Vec<u8>>,
     pub col_wise_commits: Vec<Vec<u8>>,
 }
@@ -334,12 +340,11 @@ mod tests {
         let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
         let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-        let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
+        let tensor_obj =
+            variants::tensor_variant_fft::TensorVariantFft::new(ac_commit, n, m).unwrap();
 
         let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
-        original_grid.encode().unwrap();
-
-        let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
+        let vals = original_grid.encode().unwrap();
 
         let num_samples = 20; // Number of random samples
 
@@ -378,8 +383,6 @@ mod tests {
                 &vals.z_r_2,
                 &sample_w,
                 &sample_y,
-                &vals.tilde_g_r.1,
-                &vals.tilde_g_r_2.1,
             );
 
             assert!(result.is_ok(), "Random sample failed: {:?}", result);
@@ -404,12 +407,11 @@ mod tests {
         let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
         let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-        let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
+        let tensor_obj =
+            variants::tensor_variant_fft::TensorVariantFft::new(ac_commit, n, m).unwrap();
 
         let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
-        original_grid.encode().unwrap();
-
-        let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
+        let vals = original_grid.encode().unwrap();
 
         let num_samples = 20; // Number of random samples
 
@@ -448,8 +450,6 @@ mod tests {
                 &vals.z_r_2,
                 &sample_w,
                 &sample_y,
-                &vals.tilde_g_r.1,
-                &vals.tilde_g_r_2.1,
             );
 
             assert!(result.is_ok(), "Random sample failed: {:?}", result);
@@ -474,12 +474,11 @@ mod tests {
         let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
         let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-        let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
+        let tensor_obj =
+            variants::tensor_variant_fft::TensorVariantFft::new(ac_commit, n, m).unwrap();
 
         let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
-        original_grid.encode().unwrap();
-
-        let vals = original_grid.variant.tensor_cache.as_ref().unwrap();
+        let vals = original_grid.encode().unwrap();
 
         let num_samples = 20; // Number of random samples
 
@@ -518,8 +517,6 @@ mod tests {
                 &vals.z_r_2,
                 &sample_w,
                 &sample_y,
-                &vals.tilde_g_r.1,
-                &vals.tilde_g_r_2.1,
             );
 
             assert!(result.is_ok(), "Random sample failed: {:?}", result);
@@ -544,22 +541,20 @@ mod tests {
         let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
         let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-        let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
+        let tensor_obj =
+            variants::tensor_variant_fft::TensorVariantFft::new(ac_commit, n, m).unwrap();
 
         let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
-        original_grid.encode().unwrap();
+        let mut vals = original_grid.encode().unwrap();
 
-        let (z, z_r, z_r_2, tilde_g_r, tilde_g_r_2); // Declare before the scope
+        let (z, z_r, z_r_2); // Declare before the scope
 
         {
-            let vals = original_grid.variant.tensor_cache.as_mut().unwrap();
             vals.z[[0, 0]] += Fq::from(1u64); // Corrupt
 
             z = vals.z.clone();
             z_r = vals.z_r.clone();
             z_r_2 = vals.z_r_2.clone();
-            tilde_g_r = vals.tilde_g_r.1.clone();
-            tilde_g_r_2 = vals.tilde_g_r_2.1.clone();
         }
 
         let num_samples = 20; // Number of random samples
@@ -594,8 +589,6 @@ mod tests {
                 &z_r_2,
                 &sample_w,
                 &sample_y,
-                &tilde_g_r,
-                &tilde_g_r_2,
             );
 
             if result.is_err() {
@@ -604,43 +597,6 @@ mod tests {
         }
 
         assert!(any_failed, "Sampling did not fail on corrupted data!");
-    }
-
-    #[test]
-    fn test_tensor_variant_fft_encoding_basic_functionality() {
-        let matrix = generate_mock_grid(3, 3);
-        let mut leaves: Vec<Vec<u8>> = Vec::new();
-        for _ in 0..4 {
-            let fq = Fq::new(BigInt::from(1_u8));
-            let mut buf = Vec::new();
-            fq.serialize_uncompressed(&mut buf).unwrap();
-            leaves.push(buf);
-        }
-
-        let mut rng = thread_rng();
-        let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
-        let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
-
-        let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-        let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
-
-        let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
-        let encoded_result = original_grid.encode().unwrap();
-
-        // Basic checks
-        assert!(encoded_result.z.nrows() > 0);
-        assert!(encoded_result.z.ncols() > 0);
-        assert!(original_grid.variant.tensor_cache.is_some());
-
-        let cache = original_grid.variant.tensor_cache.as_ref().unwrap();
-        assert!(cache.z.nrows() > 0);
-        assert!(cache.z.ncols() > 0);
-        assert!(cache.z_r.nrows() > 0);
-        assert!(cache.z_r.ncols() > 0);
-        assert!(cache.z_r_2.nrows() > 0);
-        assert!(cache.z_r_2.ncols() > 0);
-        assert!(!cache.row_wise_commits.is_empty());
-        assert!(!cache.col_wise_commits.is_empty());
     }
 
     #[test]
@@ -659,12 +615,13 @@ mod tests {
         let two_to_one_crh_params = <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
 
         let ac_commit = ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-        let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
+        let tensor_obj =
+            variants::tensor_variant_fft::TensorVariantFft::new(ac_commit, 4, 4).unwrap();
 
         let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
         original_grid.encode().unwrap();
 
-        let cache = original_grid.variant.tensor_cache.as_ref().unwrap();
+        let cache = original_grid.encode().unwrap();
 
         // Check that commitments have the expected structure
         assert_eq!(cache.row_wise_commits.len(), cache.z.nrows());
@@ -676,45 +633,6 @@ mod tests {
         }
         for commit in &cache.col_wise_commits {
             assert!(!commit.is_empty());
-        }
-    }
-
-    #[test]
-    fn test_tensor_variant_fft_different_matrix_sizes() {
-        let test_cases = vec![(2, 2), (3, 3), (4, 4), (2, 4), (4, 2), (8, 4), (4, 8)];
-
-        for (rows, cols) in test_cases {
-            let matrix = generate_mock_grid(rows, cols);
-            let mut leaves: Vec<Vec<u8>> = Vec::new();
-            for _ in 0..4 {
-                let fq = Fq::new(BigInt::from(1_u8));
-                let mut buf = Vec::new();
-                fq.serialize_uncompressed(&mut buf).unwrap();
-                leaves.push(buf);
-            }
-
-            let mut rng = thread_rng();
-            let leaf_crh_params = <LeafHash as CRHScheme>::setup(&mut rng).unwrap();
-            let two_to_one_crh_params =
-                <TwoToOneHash as TwoToOneCRHScheme>::setup(&mut rng).unwrap();
-
-            let ac_commit =
-                ACMerkleTree::new(leaf_crh_params, two_to_one_crh_params, leaves).unwrap();
-            let tensor_obj = variants::tensor_variant_fft::TensorVariantFft::new(ac_commit);
-
-            let mut original_grid = DataGrid::new(matrix, tensor_obj).unwrap();
-            let result = original_grid.encode();
-
-            assert!(
-                result.is_ok(),
-                "Encoding failed for {}x{} matrix",
-                rows,
-                cols
-            );
-
-            let cache = original_grid.variant.tensor_cache.as_ref().unwrap();
-            assert!(cache.z.nrows() > 0);
-            assert!(cache.z.ncols() > 0);
         }
     }
 }

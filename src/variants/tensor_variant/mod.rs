@@ -247,7 +247,6 @@ where
 
         // 2. check W.g_r = G.z_r
         // let g_r = g_r.slice(s![row_split_start..row_split_end, ..]);
-
         if !(w.dot(&self.g_r)
             == self
                 .g
